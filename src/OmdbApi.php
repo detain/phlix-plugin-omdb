@@ -60,13 +60,6 @@ final class OmdbApi
     private \Closure $timerSleep;
 
     /**
-     * Clock used for time measurements.
-     *
-     * @var \Closure(): float
-     */
-    private \Closure $clock;
-
-    /**
      * Shared HTTP client instance.
      */
     private ?Client $httpClient = null;
@@ -83,7 +76,6 @@ final class OmdbApi
         private readonly int $cacheTtlSeconds = 86400,
         private readonly ?LoggerInterface $logger = null,
     ) {
-        $this->clock = static fn(): float => hrtime(true) / 1_000_000_000.0;
         $this->timerSleep = static function (float $seconds): void {
             if (class_exists(Timer::class)) {
                 Timer::sleep($seconds);
@@ -91,6 +83,16 @@ final class OmdbApi
                 usleep((int) ($seconds * 1_000_000));
             }
         };
+    }
+
+    /**
+     * Get the current monotonic time in seconds.
+     *
+     * @return float
+     */
+    private function clock(): float
+    {
+        return hrtime(true) / 1_000_000_000.0;
     }
 
     /**
@@ -255,7 +257,7 @@ final class OmdbApi
         $cacheKey = md5($url);
         if ($this->cacheTtlSeconds > 0 && isset($this->cache[$cacheKey])) {
             $cached = $this->cache[$cacheKey];
-            if (is_array($cached) && ($cached['_cached_at'] ?? 0) > ($this->clock() - $this->cacheTtlSeconds)) {
+            if (($cached['_cached_at'] ?? 0) > ($this->clock() - $this->cacheTtlSeconds)) {
                 unset($cached['_cached_at']);
                 /** @var array<string, mixed> $cached */
                 return $cached;
@@ -270,9 +272,10 @@ final class OmdbApi
         $client->request($url, [
             'success' => function (Response $response) use (&$state): void {
                 $body = $response->getBody();
-                if ($body !== '') {
+                $contents = $body->getContents();
+                if ($contents !== '') {
                     /** @var array<string, mixed>|null $decoded */
-                    $decoded = json_decode($body, true, 16, JSON_THROW_ON_ERROR);
+                    $decoded = json_decode($contents, true, 16, JSON_THROW_ON_ERROR);
                     $state['response'] = $decoded;
                 }
                 $state['done'] = true;
@@ -286,9 +289,11 @@ final class OmdbApi
         $this->waitForResponse($state);
 
         if ($state['error'] !== null) {
+            $error = $state['error'];
+            $errorMessage = $error instanceof \Throwable ? $error->getMessage() : 'Unknown error';
             $this->logger?->warning('OMDb HTTP error', [
                 'url' => $url,
-                'error' => $state['error']->getMessage(),
+                'error' => $errorMessage,
             ]);
 
             return null;
