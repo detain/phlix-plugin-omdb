@@ -1,0 +1,8 @@
+parameters:
+    level: 9
+    paths:
+        - src
+    treatPhpDocTypesAsCertain: false
+    ignoreErrors:
+        # Workerman Timer::sleep() provided by host environment
+        - '#Call to an undefined static method Workerman\\Timer::sleep\(\)#'
