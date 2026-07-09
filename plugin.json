@@ -1,0 +1,33 @@
+{
+    "name": "phlix-plugin-omdb",
+    "version": "0.1.0",
+    "phlix_min_server_version": "0.15.0",
+    "type": "metadata",
+    "entry": "Phlix\\Plugins\\Metadata\\Omdb\\OmdbPlugin",
+    "events": [],
+    "settings": {
+        "enabled": {
+            "type": "boolean",
+            "default": false,
+            "description": "Enable OMDb metadata provider"
+        },
+        "api_key": {
+            "type": "string",
+            "default": null,
+            "secret": true,
+            "managed": false,
+            "description": "OMDb API key from http://www.omdbapi.com/apikey.aspx"
+        },
+        "use_ssl_verification": {
+            "type": "boolean",
+            "default": true,
+            "description": "Verify TLS certificates when connecting to OMDb API"
+        },
+        "cache_ttl_seconds": {
+            "type": "integer",
+            "default": 86400,
+            "description": "How long to cache OMDb API responses in seconds (default: 24h)"
+        }
+    },
+    "signature": null
+}
