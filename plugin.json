@@ -2,7 +2,7 @@
     "name": "phlix-plugin-omdb",
     "version": "0.1.0",
     "phlix_min_server_version": "0.15.0",
-    "type": "metadata",
+    "type": "metadata-provider",
     "entry": "Phlix\\Plugins\\Metadata\\Omdb\\OmdbPlugin",
     "events": [],
     "settings": {
@@ -15,7 +15,6 @@
             "type": "string",
             "default": null,
             "secret": true,
-            "managed": false,
             "description": "OMDb API key from http://www.omdbapi.com/apikey.aspx"
         },
         "use_ssl_verification": {
