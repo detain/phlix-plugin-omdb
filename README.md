@@ -36,14 +36,19 @@ The plugin is unsigned by design — install via the Phlix admin UI:
 5. Flip the toggle in the table to enable it.
 6. Enter your OMDb API key in the plugin settings (get one at http://www.omdbapi.com/apikey.aspx).
 
-## Configuration
+## Settings
 
-| Setting | Type | Default | Description |
-|---------|------|---------|-------------|
-| `enabled` | boolean | `false` | Enable the OMDb metadata provider |
-| `api_key` | string | `null` | OMDb API key (get at http://www.omdbapi.com/apikey.aspx) |
-| `use_ssl_verification` | boolean | `true` | Verify TLS certificates |
-| `cache_ttl_seconds` | integer | `86400` | Cache TTL in seconds (default: 24h) |
+| Setting | Type | Required | Secret | Default | Description |
+|---------|------|----------|--------|---------|-------------|
+| `enabled` | boolean | No | No | `false` | Master on/off for OMDb rating enrichment. Optional; default off. |
+| `api_key` | string | **Yes** | Yes | `null` | Your OMDb API key. The free tier allows 1,000 requests/day. |
+| `use_ssl_verification` | boolean | No | No | `true` | Verify OMDb's TLS certificate. Optional; default on. Leave on unless debugging. |
+| `cache_ttl_seconds` | integer | No | No | `86400` | How long to cache OMDb responses. Optional; default 86400 (24 hours). |
+
+### Where to get your OMDb API key
+
+The `api_key` setting is required. Request a free key at
+<https://www.omdbapi.com/apikey.aspx> — the free tier allows 1,000 requests/day.
 
 ## What it does
 

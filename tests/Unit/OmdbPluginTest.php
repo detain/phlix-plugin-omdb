@@ -14,6 +14,7 @@ namespace Phlix\Plugins\Metadata\Omdb\Tests;
 use Phlix\Plugins\Metadata\Omdb\OmdbApi;
 use Phlix\Plugins\Metadata\Omdb\OmdbPlugin;
 use Phlix\Plugins\Metadata\Omdb\OmdbSettings;
+use Phlix\Shared\Plugin\ConfigurableInterface;
 use PHPUnit\Framework\TestCase;
 
 final class OmdbPluginTest extends TestCase
@@ -99,6 +100,13 @@ final class OmdbPluginTest extends TestCase
         $result = $plugin->getImages('tt1375666');
 
         $this->assertSame([], $result);
+    }
+
+    public function test_implements_configurable_interface(): void
+    {
+        $plugin = new OmdbPlugin();
+
+        $this->assertInstanceOf(ConfigurableInterface::class, $plugin);
     }
 
     public function test_configure_updates_settings(): void
