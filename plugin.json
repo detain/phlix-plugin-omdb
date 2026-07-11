@@ -1,7 +1,7 @@
 {
     "name": "phlix-plugin-omdb",
-    "version": "0.1.0",
-    "phlix_min_server_version": "0.15.0",
+    "version": "0.2.0",
+    "phlix_min_server_version": "1.2.0",
     "type": "metadata-provider",
     "entry": "Phlix\\Plugins\\Metadata\\Omdb\\OmdbPlugin",
     "events": [],
@@ -9,23 +9,33 @@
         "enabled": {
             "type": "boolean",
             "default": false,
-            "description": "Enable OMDb metadata provider"
+            "required": false,
+            "label": "Enable OMDb",
+            "description": "Master on/off for OMDb rating enrichment. Optional; default off."
         },
         "api_key": {
             "type": "string",
             "default": null,
+            "required": true,
             "secret": true,
-            "description": "OMDb API key from http://www.omdbapi.com/apikey.aspx"
+            "label": "OMDb API Key",
+            "description": "Your OMDb API key. The free tier allows 1,000 requests/day.",
+            "link": "https://www.omdbapi.com/apikey.aspx",
+            "link_text": "Get a free OMDb API key"
         },
         "use_ssl_verification": {
             "type": "boolean",
             "default": true,
-            "description": "Verify TLS certificates when connecting to OMDb API"
+            "required": false,
+            "label": "Verify SSL",
+            "description": "Verify OMDb's TLS certificate. Optional; default on. Leave on unless debugging."
         },
         "cache_ttl_seconds": {
             "type": "integer",
             "default": 86400,
-            "description": "How long to cache OMDb API responses in seconds (default: 24h)"
+            "required": false,
+            "label": "Cache TTL (seconds)",
+            "description": "How long to cache OMDb responses. Optional; default 86400 (24 hours)."
         }
     },
     "signature": null

@@ -15,6 +15,7 @@ use Phlix\Plugins\Metadata\Omdb\OmdbApi;
 use Phlix\Plugins\Metadata\Omdb\OmdbSettings;
 use Phlix\Plugins\Metadata\Omdb\RatingIngester;
 use Phlix\Shared\Metadata\MetadataSourceInterface;
+use Phlix\Shared\Plugin\ConfigurableInterface;
 use Phlix\Shared\Plugin\LifecycleInterface;
 use Psr\Container\ContainerInterface;
 use Psr\Log\LoggerInterface;
@@ -47,7 +48,7 @@ use Workerman\MySQL\Connection;
  * @package Phlix\Plugins\Metadata\Omdb
  * @since 0.1.0
  */
-final class OmdbPlugin implements LifecycleInterface, MetadataSourceInterface
+final class OmdbPlugin implements ConfigurableInterface, LifecycleInterface, MetadataSourceInterface
 {
     /**
      * Canonical source name used in the host priority map.
