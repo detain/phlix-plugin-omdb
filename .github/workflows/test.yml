@@ -25,7 +25,7 @@ jobs:
         run: composer install --prefer-dist --no-progress --no-interaction
 
       - name: Run PHPUnit
-        run: vendor/bin/phpunit --colors=always
+        run: vendor/bin/phpunit --colors=always --no-coverage
 
       - name: Run PHPStan
         run: vendor/bin/phpstan analyse src --level=9
