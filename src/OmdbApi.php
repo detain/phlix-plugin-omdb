@@ -26,9 +26,9 @@ use Workerman\Timer;
 final class OmdbApi
 {
     /**
-     * OMDb API base URL.
+     * OMDb API base URL. HTTPS only — never plaintext http.
      */
-    private const API_BASE = 'http://www.omdbapi.com';
+    private const API_BASE = 'https://www.omdbapi.com';
 
     /**
      * HTTP request timeout in seconds.
@@ -65,17 +65,30 @@ final class OmdbApi
     private ?Client $httpClient = null;
 
     /**
+     * Test seam: when set, replaces the network call with a caller-supplied
+     * decoder. Signature: `function(string $url): ?array`. Left null in
+     * production so the real non-blocking Workerman client is used.
+     *
+     * @var (\Closure(string): (array<string, mixed>|null))|null
+     * @internal Tests only.
+     */
+    private $jsonFetcher = null;
+
+    /**
      * @param string $apiKey OMDb API key
      * @param bool $useSslVerification Whether to verify TLS certificates
      * @param int $cacheTtlSeconds Cache TTL in seconds (0 = disabled)
      * @param LoggerInterface|null $logger Optional PSR-3 logger
+     * @param (\Closure(string): (array<string, mixed>|null))|null $jsonFetcher Test seam replacing the network call
      */
     public function __construct(
         private readonly string $apiKey,
         private readonly bool $useSslVerification = true,
         private readonly int $cacheTtlSeconds = 86400,
         private readonly ?LoggerInterface $logger = null,
+        ?\Closure $jsonFetcher = null,
     ) {
+        $this->jsonFetcher = $jsonFetcher;
         $this->timerSleep = static function (float $seconds): void {
             if (class_exists(Timer::class)) {
                 Timer::sleep($seconds);
@@ -265,6 +278,17 @@ final class OmdbApi
         }
 
         $this->enforceRateLimit();
+
+        if ($this->jsonFetcher !== null) {
+            /** @var array<string, mixed>|null $response */
+            $response = ($this->jsonFetcher)($url);
+            if ($response !== null && $this->cacheTtlSeconds > 0) {
+                $response['_cached_at'] = $this->clock();
+                $this->cache[$cacheKey] = $response;
+            }
+
+            return $response;
+        }
 
         $state = ['response' => null, 'error' => null, 'done' => false];
         $client = $this->getHttpClient();

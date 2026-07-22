@@ -28,8 +28,7 @@
     },
     "autoload-dev": {
         "psr-4": {
-            "Phlix\\Plugins\\Metadata\\Omdb\\Tests\\": "tests/Unit/",
-            "Workerman\\MySQL\\": "dev-stubs/MySQL/"
+            "Phlix\\Plugins\\Metadata\\Omdb\\Tests\\": "tests/Unit/"
         }
     },
     "config": {

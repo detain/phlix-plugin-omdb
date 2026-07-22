@@ -13,30 +13,31 @@ namespace Phlix\Plugins\Metadata\Omdb;
 
 use Phlix\Plugins\Metadata\Omdb\OmdbApi;
 use Phlix\Plugins\Metadata\Omdb\OmdbSettings;
-use Phlix\Plugins\Metadata\Omdb\RatingIngester;
 use Phlix\Shared\Metadata\MetadataSourceInterface;
 use Phlix\Shared\Plugin\ConfigurableInterface;
 use Phlix\Shared\Plugin\LifecycleInterface;
 use Psr\Container\ContainerInterface;
 use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
-use Workerman\MySQL\Connection;
 
 /**
  * OMDb metadata provider plugin for Phlix.
  *
  * Fetches metadata and ratings from the OMDb API for movies and TV series.
- * Ratings are stored in the metadata_ratings table and feed into Phlix's
- * rating aggregation pipeline.
+ * This is a PURE READ source: {@see getDetails()} fetches, shapes, and returns
+ * data only — it performs no persistence. Ratings are emitted under the host
+ * `metadata_ratings.source` ENUM values (`imdb`, `rt`); the host resolver
+ * (F2) owns writing them and computing any aggregate.
  *
  * ## Features
  *
  * - IMDb ID resolution via title + year search
- * - Multi-source ratings: IMDb, Rotten Tomatoes, Metascore
- * - Ratings stored in metadata_ratings for aggregation
- * - Non-blocking async HTTP via Workerman/http-client
+ * - Ratings emitted enum-safe: IMDb -> `imdb`, Rotten Tomatoes -> `rt`
+ *   (Metascore has no valid ENUM member and is dropped)
+ * - Non-blocking async HTTP via Workerman/http-client (HTTPS only)
  * - Configurable rate limiting and response caching
  * - TLS verification toggle for self-hosted proxies
+ * - onEnable is a cheap wire-only step: no network, no DB, never throws
  *
  * ## Configuration (plugin.json settings)
  *
@@ -59,13 +60,11 @@ final class OmdbPlugin implements ConfigurableInterface, LifecycleInterface, Met
      * @param OmdbSettings|null $settings Initial settings (loaded from DB on enable)
      * @param LoggerInterface|null $logger Optional PSR-3 logger
      * @param OmdbApi|null $api Pre-built API client (test seam)
-     * @param RatingIngester|null $ingester Pre-built rating ingester (test seam)
      */
     public function __construct(
         private ?OmdbSettings $settings = null,
         private ?LoggerInterface $logger = null,
         private ?OmdbApi $api = null,
-        private ?RatingIngester $ingester = null,
     ) {
         $this->settings = $this->settings ?? new OmdbSettings();
         $this->logger = $this->logger ?? new NullLogger();
@@ -83,66 +82,68 @@ final class OmdbPlugin implements ConfigurableInterface, LifecycleInterface, Met
     }
 
     /**
-     * Called by the loader once when the plugin is enabled.
+     * Called by the loader once when the plugin is enabled — the cheap
+     * "wire" step ONLY.
      *
-     * Validates connectivity and credentials, and registers with the host
-     * SourceRegistry so the metadata pipeline can consume OMDb results.
+     * A future boot activation (F1) calls onEnable across ~14 resident
+     * workers, so this MUST be non-blocking and total-failure-free:
+     *
+     * - NO network I/O (no search(), no connectivity probe).
+     * - NO database connection, NO migrations.
+     * - NEVER throws on a missing API key.
+     *
+     * It only resolves a logger and constructs the (network-free) transport
+     * object. The actual "connect" is deferred to {@see ensureApi()}, which
+     * runs lazily on the first search/getDetails/getImages call.
      *
      * @param ContainerInterface $container Host PSR-11 container
      * @return void
-     * @throws \RuntimeException If API key is missing or OMDb is unreachable
      */
     public function onEnable(ContainerInterface $container): void
     {
         if ($this->logger instanceof NullLogger) {
-            $logger = $container->get(LoggerInterface::class);
-            $this->logger = $logger instanceof LoggerInterface ? $logger : new NullLogger();
+            try {
+                $logger = $container->get(LoggerInterface::class);
+                $this->logger = $logger instanceof LoggerInterface ? $logger : new NullLogger();
+            } catch (\Throwable) {
+                $this->logger = new NullLogger();
+            }
+        }
+
+        // Wire-only: construct the transport if a key is already present.
+        // This performs NO network I/O — the OmdbApi constructor is inert.
+        $this->ensureApi();
+    }
+
+    /**
+     * Deferred "connect" step: lazily construct the OMDb transport.
+     *
+     * Called on the first read (search/getDetails/getImages), never at boot.
+     * Constructing {@see OmdbApi} performs NO network I/O; the first request
+     * only happens when a method on the returned client is invoked.
+     *
+     * @return OmdbApi|null The client, or null when no API key is configured
+     */
+    private function ensureApi(): ?OmdbApi
+    {
+        if ($this->api !== null) {
+            return $this->api;
         }
 
         $settings = $this->settings ?? new OmdbSettings();
-
-        if (!$settings->hasApiKey()) {
-            throw new \RuntimeException(
-                'OMDb API key not configured. Add your API key in the plugin settings.'
-            );
+        $apiKey = $settings->apiKey;
+        if (!is_string($apiKey) || $apiKey === '') {
+            return null;
         }
 
-        // Initialize the API client if not injected
-        $api = $this->api;
-        if ($api === null) {
-            $apiKey = $settings->apiKey;
-            if (is_string($apiKey)) {
-                $api = new OmdbApi(
-                    apiKey: $apiKey,
-                    useSslVerification: $settings->useSslVerification,
-                    cacheTtlSeconds: $settings->cacheTtlSeconds,
-                    logger: $this->logger,
-                );
-                $this->api = $api;
-            }
-        }
+        $this->api = new OmdbApi(
+            apiKey: $apiKey,
+            useSslVerification: $settings->useSslVerification,
+            cacheTtlSeconds: $settings->cacheTtlSeconds,
+            logger: $this->logger ?? new NullLogger(),
+        );
 
-        // Initialize the rating ingester if not injected
-        if ($this->ingester === null) {
-            try {
-                $db = $container->get(Connection::class);
-                if ($db instanceof Connection) {
-                    $this->ingester = new RatingIngester($db, $this->logger);
-                }
-            } catch (\Throwable $e) {
-                $this->logger?->warning('OMDb: database connection unavailable; ratings will not be stored', [
-                    'error' => $e->getMessage(),
-                ]);
-            }
-        }
-
-        // Validate connectivity with a lightweight test request
-        if ($api !== null) {
-            $test = $api->search('test', 2020);
-            if ($test === []) {
-                $this->logger?->warning('OMDb: search returned no results for test query — API may be unreachable');
-            }
-        }
+        return $this->api;
     }
 
     /**
@@ -206,7 +207,11 @@ final class OmdbPlugin implements ConfigurableInterface, LifecycleInterface, Met
     public function search(string $query, array $options = []): array
     {
         $settings = $this->settings ?? new OmdbSettings();
-        if (!$settings->isConfigured() || $this->api === null) {
+        if (!$settings->isConfigured()) {
+            return [];
+        }
+        $api = $this->ensureApi();
+        if ($api === null) {
             return [];
         }
 
@@ -215,7 +220,7 @@ final class OmdbPlugin implements ConfigurableInterface, LifecycleInterface, Met
             $year = $options['year'];
         }
 
-        $results = $this->api->search($query, $year);
+        $results = $api->search($query, $year);
 
         $items = [];
         foreach ($results as $result) {
@@ -244,6 +249,16 @@ final class OmdbPlugin implements ConfigurableInterface, LifecycleInterface, Met
     /**
      * Fetch the full metadata record for an IMDb ID.
      *
+     * This is a PURE READ: fetch, shape, return. It performs NO persistence
+     * and ignores any `media_item_id` hint — the host resolver (F2) owns the
+     * media_item_id and drives writing ratings/fields into the DB. Results are
+     * intended to merge UNDER TMDB (gap-fill only).
+     *
+     * Ratings are emitted enum-safe for `metadata_ratings.source`
+     * (allowed: imdb, tmdb, rt, aggregate): IMDb -> `imdb`,
+     * Rotten Tomatoes -> `rt`. Metascore is DROPPED (no valid ENUM member),
+     * and no plugin-local aggregate is computed.
+     *
      * @param string $externalId IMDb ID from search() (e.g., "tt0120737")
      * @param array<string, mixed> $options Optional hints such as language
      * @return array<string, mixed> Detailed metadata, or [] when not found
@@ -251,19 +266,34 @@ final class OmdbPlugin implements ConfigurableInterface, LifecycleInterface, Met
     public function getDetails(string $externalId, array $options = []): array
     {
         $settings = $this->settings ?? new OmdbSettings();
-        if (!$settings->isConfigured() || $this->api === null) {
+        if (!$settings->isConfigured()) {
+            return [];
+        }
+        $api = $this->ensureApi();
+        if ($api === null) {
             return [];
         }
 
-        $details = $this->api->getByImdbId($externalId);
+        $details = $api->getByImdbId($externalId);
         if ($details === null) {
             return [];
         }
 
         $ratings = OmdbApi::extractRatings($details);
 
-        // Build the return array with standard metadata fields
-        $result = [
+        // Emit ratings ONLY under valid metadata_ratings.source ENUM values.
+        // Metascore is intentionally omitted (no valid ENUM member) and no
+        // aggregate is computed here — the host resolver owns aggregation.
+        $ratingList = [];
+        if ($ratings['imdb'] !== null) {
+            $ratingList[] = ['source' => 'imdb', 'score' => $ratings['imdb']];
+        }
+        if ($ratings['rotten_tomatoes'] !== null) {
+            $ratingList[] = ['source' => 'rt', 'score' => $ratings['rotten_tomatoes']];
+        }
+
+        // Build the return array with standard metadata fields (pure read).
+        return [
             'source' => self::SOURCE_NAME,
             'imdb_id' => $externalId,
             'title' => $details['Title'] ?? '',
@@ -281,27 +311,8 @@ final class OmdbPlugin implements ConfigurableInterface, LifecycleInterface, Met
             'awards' => $details['Awards'] ?? '',
             'poster_url' => $details['Poster'] ?? '',
             'type' => $details['Type'] ?? '',
-            'imdb_rating' => $ratings['imdb'],
-            'rotten_tomatoes_rating' => $ratings['rotten_tomatoes'],
-            'metascore' => $ratings['metascore'],
+            'ratings' => $ratingList,
         ];
-
-        // Ingest ratings into metadata_ratings if ingester is available
-        $mediaItemId = $options['media_item_id'] ?? null;
-        if (
-            $this->ingester !== null
-            && is_string($mediaItemId)
-            && $mediaItemId !== ''
-        ) {
-            $this->ingester->ingest(
-                $mediaItemId,
-                $ratings['imdb'],
-                $ratings['rotten_tomatoes'],
-                $ratings['metascore'],
-            );
-        }
-
-        return $result;
     }
 
     /**
@@ -315,11 +326,15 @@ final class OmdbPlugin implements ConfigurableInterface, LifecycleInterface, Met
     public function getImages(string $externalId): array
     {
         $settings = $this->settings ?? new OmdbSettings();
-        if (!$settings->isConfigured() || $this->api === null) {
+        if (!$settings->isConfigured()) {
+            return [];
+        }
+        $api = $this->ensureApi();
+        if ($api === null) {
             return [];
         }
 
-        $details = $this->api->getByImdbId($externalId);
+        $details = $api->getByImdbId($externalId);
         if ($details === null) {
             return [];
         }

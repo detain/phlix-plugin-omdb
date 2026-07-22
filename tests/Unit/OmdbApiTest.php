@@ -134,4 +134,45 @@ final class OmdbApiTest extends TestCase
         $this->assertEqualsWithDelta(9.2, $ratings['rotten_tomatoes'], 0.01);
         $this->assertEqualsWithDelta(6.4, $ratings['metascore'], 0.01);
     }
+
+    /**
+     * Consequence: the OMDb endpoint is HTTPS, never plaintext http.
+     */
+    public function test_api_base_is_https(): void
+    {
+        $base = (new \ReflectionClass(OmdbApi::class))->getConstant('API_BASE');
+
+        $this->assertIsString($base);
+        $this->assertStringStartsWith('https://', $base);
+    }
+
+    /**
+     * Consequence: the default transport is the non-blocking Workerman
+     * cooperative-wait HTTP client — not curl/file_get_contents.
+     */
+    public function test_default_transport_is_workerman_http_client(): void
+    {
+        $api = new OmdbApi('key');
+
+        $method = new \ReflectionMethod(OmdbApi::class, 'getHttpClient');
+        $method->setAccessible(true);
+        $client = $method->invoke($api);
+
+        $this->assertInstanceOf(\Workerman\Http\Client::class, $client);
+    }
+
+    /**
+     * Consequence: the injected fetcher seam is honoured (no network),
+     * proving the transport is a replaceable, non-blocking indirection.
+     */
+    public function test_json_fetcher_seam_bypasses_network(): void
+    {
+        $data = ['Response' => 'True', 'Title' => 'Inception', 'imdbRating' => '8.8'];
+        $api = new OmdbApi('key', true, 0, null, static fn(string $url): ?array => $data);
+
+        $result = $api->getByImdbId('tt1375666');
+
+        $this->assertNotNull($result);
+        $this->assertSame('Inception', $result['Title']);
+    }
 }
