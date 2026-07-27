@@ -4,20 +4,20 @@
 
 > OMDb metadata provider for [Phlix](https://github.com/detain/phlix) — IMDb/RT/Metascore ratings aggregation for movies and TV.
 
-Queries the [OMDb API](http://www.omdbapi.com/) to enrich Phlix media items with
+Queries the [OMDb API](https://www.omdbapi.com/) to enrich Phlix media items with
 IMDb ID, Rotten Tomatoes critic rating, and Metascore ratings. Ratings are
-stored in the `metadata_ratings` table and feed into Phlix's rating aggregation
-pipeline.
+returned under the valid `metadata_ratings.source` ENUM values (`imdb`, `rt`);
+the host resolver owns writing them and Phlix's rating aggregation.
 
 ## Features
 
 - **IMDb ID resolution** — search by title + year to resolve the canonical IMDb ID
-- **Multi-source ratings** — captures IMDb, Rotten Tomatoes, and Metascore scores
-- **Non-blocking HTTP** — async HTTP client compatible with Workerman's event loop
+- **Multi-source ratings** — captures IMDb and Rotten Tomatoes scores (Metascore is dropped — no valid `metadata_ratings.source` ENUM member)
+- **Non-blocking HTTP** — async HTTPS-only client compatible with Workerman's event loop
 - **Rate limiting** — configurable request throttling to respect OMDb API limits
 - **Response caching** — configurable in-memory cache TTL to reduce API calls
 - **TLS verification toggle** — option to disable SSL verification for self-hosted proxies
-- **Ratings ingestion** — writes ratings directly to `metadata_ratings` for aggregation
+- **Pure read** — `getDetails()` fetches and shapes data only; `onEnable()` does no network or DB I/O and never throws on a missing key
 
 ## Install
 
@@ -34,16 +34,16 @@ The plugin is unsigned by design — install via the Phlix admin UI:
 4. The server downloads the manifest, validates it, runs `composer install --no-dev`,
    and stores a row in the `plugins` table. The plugin lands **disabled** by default.
 5. Flip the toggle in the table to enable it.
-6. Enter your OMDb API key in the plugin settings (get one at http://www.omdbapi.com/apikey.aspx).
+6. Enter your OMDb API key in the plugin settings (get one at https://www.omdbapi.com/apikey.aspx).
 
 ## Settings
 
-| Setting | Type | Required | Secret | Default | Description |
-|---------|------|----------|--------|---------|-------------|
-| `enabled` | boolean | No | No | `false` | Master on/off for OMDb rating enrichment. Optional; default off. |
-| `api_key` | string | **Yes** | Yes | `null` | Your OMDb API key. The free tier allows 1,000 requests/day. |
-| `use_ssl_verification` | boolean | No | No | `true` | Verify OMDb's TLS certificate. Optional; default on. Leave on unless debugging. |
-| `cache_ttl_seconds` | integer | No | No | `86400` | How long to cache OMDb responses. Optional; default 86400 (24 hours). |
+| Setting | Type | Required | Secret | Tier | Default | Description |
+|---------|------|----------|--------|------|---------|-------------|
+| `enabled` | boolean | No | No | `standard` | `false` | Master on/off for OMDb rating enrichment. Optional; default off. |
+| `api_key` | string | **Yes** | Yes | `standard` | `null` | Your OMDb API key. The free tier allows 1,000 requests/day. |
+| `use_ssl_verification` | boolean | No | No | `advanced` | `true` | Verify OMDb's TLS certificate. Optional; default on. Leave on unless debugging. |
+| `cache_ttl_seconds` | integer | No | No | `advanced` | `86400` | How long to cache OMDb responses. Optional; default 86400 (24 hours). |
 
 ### Where to get your OMDb API key
 
@@ -58,7 +58,8 @@ the Phlix metadata manager requests details for a media item:
 1. The plugin receives the search query (title + optional year)
 2. It queries OMDb's search endpoint to find matching entries
 3. It fetches full details including ratings for the selected IMDb ID
-4. Ratings are written to `metadata_ratings` and feed into the rating aggregation
+4. Ratings are returned as a `ratings` list using the `metadata_ratings.source`
+   ENUM values (`imdb`, `rt`) for the host resolver to persist and aggregate
 
 ## Supported media types
 
