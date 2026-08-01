@@ -21,12 +21,12 @@ declare(strict_types=1);
  * here that match the published shapes.
  */
 
-require __DIR__ . '/../vendor/autoload.php';
+require __DIR__.'/../vendor/autoload.php';
 
 if (!interface_exists(\Phlix\Shared\Plugin\LifecycleInterface::class)) {
-    require __DIR__ . '/../dev-stubs/LifecycleInterface.php';
+    require __DIR__.'/../dev-stubs/LifecycleInterface.php';
 }
 
 if (!interface_exists(\Phlix\Shared\Metadata\MetadataSourceInterface::class)) {
-    require __DIR__ . '/../dev-stubs/MetadataSourceInterface.php';
+    include __DIR__.'/../dev-stubs/MetadataSourceInterface.php';
 }

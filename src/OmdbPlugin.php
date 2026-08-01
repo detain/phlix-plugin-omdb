@@ -57,17 +57,17 @@ final class OmdbPlugin implements ConfigurableInterface, LifecycleInterface, Met
     public const SOURCE_NAME = 'omdb';
 
     /**
-     * @param OmdbSettings|null $settings Initial settings (loaded from DB on enable)
-     * @param LoggerInterface|null $logger Optional PSR-3 logger
-     * @param OmdbApi|null $api Pre-built API client (test seam)
+     * @param OmdbSettings|null $settings             Initial settings (loaded from DB on enable)
+     * @param LoggerInterface|null $logger            Optional PSR-3 logger
+     * @param OmdbApi|null $api                       Pre-built API client (test seam)
      */
     public function __construct(
         private ?OmdbSettings $settings = null,
         private ?LoggerInterface $logger = null,
         private ?OmdbApi $api = null,
     ) {
-        $this->settings = $this->settings ?? new OmdbSettings();
-        $this->logger = $this->logger ?? new NullLogger();
+        $this->settings ??= new OmdbSettings();
+        $this->logger ??= new NullLogger();
     }
 
     /**
@@ -132,7 +132,7 @@ final class OmdbPlugin implements ConfigurableInterface, LifecycleInterface, Met
 
         $settings = $this->settings ?? new OmdbSettings();
         $apiKey = $settings->apiKey;
-        if (!is_string($apiKey) || $apiKey === '') {
+        if (is_string($apiKey) === false || $apiKey === '') {
             return null;
         }
 
@@ -207,7 +207,7 @@ final class OmdbPlugin implements ConfigurableInterface, LifecycleInterface, Met
     public function search(string $query, array $options = []): array
     {
         $settings = $this->settings ?? new OmdbSettings();
-        if (!$settings->isConfigured()) {
+        if ($settings->isConfigured() === false) {
             return [];
         }
         $api = $this->ensureApi();
@@ -224,15 +224,15 @@ final class OmdbPlugin implements ConfigurableInterface, LifecycleInterface, Met
 
         $items = [];
         foreach ($results as $result) {
-            if (!is_array($result)) {
+            if (is_array($result) === false) {
                 continue;
             }
-            $imdbId = is_string($result['imdb_id'] ?? null) ? $result['imdb_id'] : '';
+            $imdbId = (is_string($result['imdb_id'] ?? null) ? $result['imdb_id'] : '');
             if ($imdbId === '') {
                 continue;
             }
 
-            $title = is_string($result['title'] ?? null) ? $result['title'] : '';
+            $title = (is_string($result['title'] ?? null) ? $result['title'] : '');
 
             /** @var array{id: non-empty-string, title: string} $entry */
             $entry = [
@@ -266,7 +266,7 @@ final class OmdbPlugin implements ConfigurableInterface, LifecycleInterface, Met
     public function getDetails(string $externalId, array $options = []): array
     {
         $settings = $this->settings ?? new OmdbSettings();
-        if (!$settings->isConfigured()) {
+        if ($settings->isConfigured() === false) {
             return [];
         }
         $api = $this->ensureApi();
@@ -294,24 +294,24 @@ final class OmdbPlugin implements ConfigurableInterface, LifecycleInterface, Met
 
         // Build the return array with standard metadata fields (pure read).
         return [
-            'source' => self::SOURCE_NAME,
-            'imdb_id' => $externalId,
-            'title' => $details['Title'] ?? '',
-            'year' => $details['Year'] ?? '',
-            'rated' => $details['Rated'] ?? '',
-            'released' => $details['Released'] ?? '',
-            'runtime' => $details['Runtime'] ?? '',
-            'genre' => $details['Genre'] ?? '',
-            'director' => $details['Director'] ?? '',
-            'writer' => $details['Writer'] ?? '',
-            'actors' => $details['Actors'] ?? '',
-            'plot' => $details['Plot'] ?? '',
-            'language' => $details['Language'] ?? '',
-            'country' => $details['Country'] ?? '',
-            'awards' => $details['Awards'] ?? '',
-            'poster_url' => $details['Poster'] ?? '',
-            'type' => $details['Type'] ?? '',
-            'ratings' => $ratingList,
+            'source'    => self::SOURCE_NAME,
+            'imdb_id'   => $externalId,
+            'title'     => $details['Title'] ?? '',
+            'year'      => $details['Year'] ?? '',
+            'rated'     => $details['Rated'] ?? '',
+            'released'  => $details['Released'] ?? '',
+            'runtime'   => $details['Runtime'] ?? '',
+            'genre'     => $details['Genre'] ?? '',
+            'director'  => $details['Director'] ?? '',
+            'writer'    => $details['Writer'] ?? '',
+            'actors'    => $details['Actors'] ?? '',
+            'plot'      => $details['Plot'] ?? '',
+            'language'  => $details['Language'] ?? '',
+            'country'   => $details['Country'] ?? '',
+            'awards'    => $details['Awards'] ?? '',
+            'poster_url'=> $details['Poster'] ?? '',
+            'type'      => $details['Type'] ?? '',
+            'ratings'   => $ratingList,
         ];
     }
 
@@ -326,7 +326,7 @@ final class OmdbPlugin implements ConfigurableInterface, LifecycleInterface, Met
     public function getImages(string $externalId): array
     {
         $settings = $this->settings ?? new OmdbSettings();
-        if (!$settings->isConfigured()) {
+        if ($settings->isConfigured() === false) {
             return [];
         }
         $api = $this->ensureApi();
@@ -340,7 +340,7 @@ final class OmdbPlugin implements ConfigurableInterface, LifecycleInterface, Met
         }
 
         $poster = $details['Poster'] ?? '';
-        if (!is_string($poster) || $poster === '' || $poster === 'N/A') {
+        if (is_string($poster) === false || $poster === '' || $poster === 'N/A') {
             return [];
         }
 

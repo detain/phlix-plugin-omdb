@@ -34,7 +34,7 @@ The plugin is unsigned by design — install via the Phlix admin UI:
 4. The server downloads the manifest, validates it, runs `composer install --no-dev`,
    and stores a row in the `plugins` table. The plugin lands **disabled** by default.
 5. Flip the toggle in the table to enable it.
-6. Enter your OMDb API key in the plugin settings (get one at https://www.omdbapi.com/apikey.aspx).
+6. Enter your OMDb API key in the plugin settings (get one at [OMDb API](https://www.omdbapi.com/apikey.aspx)).
 
 ## Settings
 

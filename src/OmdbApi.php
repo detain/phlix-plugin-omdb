@@ -83,10 +83,10 @@ final class OmdbApi
      */
     public function __construct(
         private readonly string $apiKey,
-        private readonly bool $useSslVerification = true,
-        private readonly int $cacheTtlSeconds = 86400,
-        private readonly ?LoggerInterface $logger = null,
-        ?\Closure $jsonFetcher = null,
+        private readonly bool $useSslVerification=true,
+        private readonly int $cacheTtlSeconds=86400,
+        private readonly ?LoggerInterface $logger=null,
+        ?\Closure $jsonFetcher=null,
     ) {
         $this->jsonFetcher = $jsonFetcher;
         $this->timerSleep = static function (float $seconds): void {
@@ -105,7 +105,7 @@ final class OmdbApi
      */
     private function clock(): float
     {
-        return hrtime(true) / 1_000_000_000.0;
+        return (hrtime(true) / 1_000_000_000.0);
     }
 
     /**
@@ -134,26 +134,26 @@ final class OmdbApi
         }
 
         $results = $data['Search'] ?? null;
-        if (!is_array($results)) {
+        if (is_array($results) === false) {
             return [];
         }
 
         $items = [];
         foreach ($results as $result) {
-            if (!is_array($result)) {
+            if (is_array($result) === false) {
                 continue;
             }
 
-            $imdbId = is_string($result['imdbID'] ?? null) ? $result['imdbID'] : '';
+            $imdbId = (is_string($result['imdbID'] ?? null) ? $result['imdbID'] : '');
             if ($imdbId === '') {
                 continue;
             }
 
             $items[] = [
                 'imdb_id' => $imdbId,
-                'title' => is_string($result['Title'] ?? null) ? $result['Title'] : '',
-                'year' => is_string($result['Year'] ?? null) ? $result['Year'] : '',
-                'type' => is_string($result['Type'] ?? null) ? $result['Type'] : '',
+                'title'   => (is_string($result['Title'] ?? null) ? $result['Title'] : ''),
+                'year'    => (is_string($result['Year'] ?? null) ? $result['Year'] : ''),
+                'type'    => (is_string($result['Type'] ?? null) ? $result['Type'] : ''),
             ];
         }
 
@@ -195,22 +195,22 @@ final class OmdbApi
         $rottenTomatoes = null;
         $metascore = null;
 
-        // Extract IMDb rating
+        // Extract IMDb rating.
         $imdbRating = $details['imdbRating'] ?? null;
         if (is_string($imdbRating) && $imdbRating !== 'N/A' && is_numeric($imdbRating)) {
             $imdb = (float) $imdbRating;
         }
 
         // Extract ratings from the Ratings array
-        $ratings = $details['Ratings'] ?? null;
+        $ratings = ($details['Ratings'] ?? null);
         if (is_array($ratings)) {
             foreach ($ratings as $rating) {
-                if (!is_array($rating)) {
+                if (is_array($rating) === false) {
                     continue;
                 }
 
-                $source = is_string($rating['Source'] ?? null) ? $rating['Source'] : '';
-                $value = is_string($rating['Value'] ?? null) ? $rating['Value'] : '';
+                $source = (is_string($rating['Source'] ?? null) ? $rating['Source'] : '');
+                $value = (is_string($rating['Value'] ?? null) ? $rating['Value'] : '');
 
                 if ($source === 'Rotten Tomatoes' && $value !== 'N/A') {
                     // RT returns "95%" format
@@ -347,7 +347,7 @@ final class OmdbApi
             'timeout' => self::HTTP_TIMEOUT_SEC,
         ];
 
-        if (!$this->useSslVerification) {
+        if ($this->useSslVerification === false) {
             $options['verify_ssl'] = false;
         }
 
@@ -382,7 +382,7 @@ final class OmdbApi
         $maxWait = self::HTTP_TIMEOUT_SEC + 1.0;
         $waited = 0.0;
 
-        while (!$state['done'] && $waited < $maxWait) {
+        while ($state['done'] === false && $waited < $maxWait) {
             usleep(10_000); // 10ms
             $waited += 0.01;
         }

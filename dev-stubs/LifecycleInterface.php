@@ -27,15 +27,20 @@ use Psr\Container\ContainerInterface;
  */
 interface LifecycleInterface
 {
+
     /**
      * @param ContainerInterface $container Host PSR-11 container
+     * @return void
      */
     public function onEnable(ContainerInterface $container): void;
 
+
     public function onDisable(): void;
+
 
     /**
      * @return array<class-string, string|callable>
      */
     public function subscribedEvents(): array;
 }
+// end interface
