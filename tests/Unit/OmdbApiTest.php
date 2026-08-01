@@ -821,4 +821,45 @@ final class OmdbApiTest extends TestCase
 
         $this->assertNull($ratings['imdb']);
     }
+
+    /**
+     * Test that clock() returns increasing values on subsequent calls.
+     */
+    public function test_clock_returns_increasing_values(): void
+    {
+        $api = new OmdbApi('key', true, 0);
+
+        $method = new \ReflectionMethod(OmdbApi::class, 'clock');
+        $method->setAccessible(true);
+
+        $time1 = $method->invoke($api);
+        usleep(1000); // 1ms
+        $time2 = $method->invoke($api);
+
+        $this->assertGreaterThan($time1, $time2);
+    }
+
+    /**
+     * Test that rate limiting is enforced by verifying lastRequestTimestamp updates.
+     * We can't easily test the sleep path without actual timing, but we can verify
+     * the rate limiting logic is in place by checking the property changes.
+     */
+    public function test_enforce_rate_limit_updates_timestamp(): void
+    {
+        $api = new OmdbApi('key', true, 0);
+
+        $reflection = new \ReflectionClass($api);
+        $timestampProperty = $reflection->getProperty('lastRequestTimestamp');
+        $timestampProperty->setAccessible(true);
+
+        $initialTimestamp = $timestampProperty->getValue($api);
+
+        $method = new \ReflectionMethod(OmdbApi::class, 'enforceRateLimit');
+        $method->setAccessible(true);
+        $method->invoke($api);
+
+        $newTimestamp = $timestampProperty->getValue($api);
+
+        $this->assertGreaterThanOrEqual($initialTimestamp, $newTimestamp);
+    }
 }

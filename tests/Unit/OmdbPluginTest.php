@@ -617,7 +617,7 @@ final class OmdbPluginTest extends TestCase
     }
 
     /**
-     * Consequence: ensureApi() returns null when settings have no apiKey.
+     * Consequence: ensureApi() returns null when apiKey is null.
      * This exercises the null apiKey path.
      */
     public function test_ensure_api_returns_null_when_api_key_is_null(): void
@@ -630,6 +630,33 @@ final class OmdbPluginTest extends TestCase
         $api = $method->invoke($plugin);
 
         $this->assertNull($api);
+    }
+
+    /**
+     * Consequence: ensureApi() creates a new OmdbApi when no prebuilt API exists
+     * and settings have a valid apiKey.
+     * This exercises lines 139-146 where new OmdbApi() is called.
+     */
+    public function test_ensure_api_creates_new_api_when_no_prebuilt(): void
+    {
+        $settings = new OmdbSettings(enabled: true, apiKey: 'test_key');
+        $plugin = new OmdbPlugin($settings);
+
+        // Verify no prebuilt API
+        $reflection = new \ReflectionClass($plugin);
+        $apiProperty = $reflection->getProperty('api');
+        $apiProperty->setAccessible(true);
+        $this->assertNull($apiProperty->getValue($plugin));
+
+        // Call ensureApi via reflection
+        $method = new \ReflectionMethod(OmdbPlugin::class, 'ensureApi');
+        $method->setAccessible(true);
+        $api = $method->invoke($plugin);
+
+        // Verify a new API was created and stored
+        $this->assertNotNull($api);
+        $this->assertInstanceOf(OmdbApi::class, $api);
+        $this->assertSame($api, $apiProperty->getValue($plugin));
     }
 
     /**
