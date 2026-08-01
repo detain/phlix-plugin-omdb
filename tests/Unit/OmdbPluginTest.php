@@ -577,4 +577,98 @@ final class OmdbPluginTest extends TestCase
             }
         };
     }
+
+    // -------------------------------------------------------------------------
+    // ensureApi() returns null when API key is empty string
+    // -------------------------------------------------------------------------
+
+    /**
+     * Consequence: ensureApi() returns null when apiKey is an empty string.
+     * This exercises the !is_string($apiKey) || $apiKey === '' branch.
+     */
+    public function test_ensure_api_returns_null_when_api_key_is_empty_string(): void
+    {
+        $settings = new OmdbSettings(enabled: true, apiKey: '');
+        $plugin = new OmdbPlugin($settings);
+
+        // Use reflection to call the private ensureApi method
+        $method = new \ReflectionMethod(OmdbPlugin::class, 'ensureApi');
+        $method->setAccessible(true);
+        $api = $method->invoke($plugin);
+
+        $this->assertNull($api);
+    }
+
+    /**
+     * Consequence: ensureApi() returns pre-built API when available.
+     * This exercises the $this->api !== null early return path.
+     */
+    public function test_ensure_api_returns_prebuilt_api(): void
+    {
+        $prebuiltApi = new OmdbApi('test_key');
+        $settings = new OmdbSettings(enabled: true, apiKey: 'different_key');
+        $plugin = new OmdbPlugin($settings, null, $prebuiltApi);
+
+        $method = new \ReflectionMethod(OmdbPlugin::class, 'ensureApi');
+        $method->setAccessible(true);
+        $api = $method->invoke($plugin);
+
+        $this->assertSame($prebuiltApi, $api);
+    }
+
+    /**
+     * Consequence: ensureApi() returns null when settings have no apiKey.
+     * This exercises the null apiKey path.
+     */
+    public function test_ensure_api_returns_null_when_api_key_is_null(): void
+    {
+        $settings = new OmdbSettings(enabled: true, apiKey: null);
+        $plugin = new OmdbPlugin($settings);
+
+        $method = new \ReflectionMethod(OmdbPlugin::class, 'ensureApi');
+        $method->setAccessible(true);
+        $api = $method->invoke($plugin);
+
+        $this->assertNull($api);
+    }
+
+    /**
+     * Consequence: search() returns empty when api is prebuilt but settings not configured.
+     * This tests the full path when ensureApi returns null due to unconfigured settings.
+     */
+    public function test_search_returns_empty_when_settings_not_configured(): void
+    {
+        $settings = new OmdbSettings(enabled: false, apiKey: 'key');
+        $plugin = new OmdbPlugin($settings);
+
+        $results = $plugin->search('Inception');
+
+        $this->assertSame([], $results);
+    }
+
+    /**
+     * Consequence: getDetails() returns empty when settings not configured.
+     */
+    public function test_getDetails_returns_empty_when_settings_disabled(): void
+    {
+        $settings = new OmdbSettings(enabled: false, apiKey: 'key');
+        $plugin = new OmdbPlugin($settings);
+
+        $result = $plugin->getDetails('tt1375666');
+
+        $this->assertSame([], $result);
+    }
+
+    /**
+     * Consequence: getImages() returns empty when settings not configured.
+     */
+    public function test_getImages_returns_empty_when_settings_disabled(): void
+    {
+        $settings = new OmdbSettings(enabled: false, apiKey: 'key');
+        $plugin = new OmdbPlugin($settings);
+
+        $result = $plugin->getImages('tt1375666');
+
+        $this->assertSame([], $result);
+    }
 }

@@ -392,4 +392,179 @@ final class OmdbApiTest extends TestCase
         // 85.5 / 10 = 8.55, which rounds to 8.6
         $this->assertEqualsWithDelta(8.6, $ratings['metascore'], 0.01);
     }
+
+    /**
+     * Test parsePercentage returns null for invalid format (no percent sign).
+     * This exercises the return null path in parsePercentage.
+     */
+    public function test_parse_percentage_returns_null_for_invalid_format(): void
+    {
+        $details = [
+            'imdbRating' => 'N/A',
+            'Ratings' => [
+                ['Source' => 'Rotten Tomatoes', 'Value' => '95'], // Missing %
+            ],
+        ];
+
+        $ratings = OmdbApi::extractRatings($details);
+
+        $this->assertNull($ratings['rotten_tomatoes']);
+    }
+
+    /**
+     * Test parsePercentage returns null for malformed format.
+     */
+    public function test_parse_percentage_returns_null_for_malformed_value(): void
+    {
+        $details = [
+            'imdbRating' => 'N/A',
+            'Ratings' => [
+                ['Source' => 'Rotten Tomatoes', 'Value' => '%95'], // Wrong order
+            ],
+        ];
+
+        $ratings = OmdbApi::extractRatings($details);
+
+        $this->assertNull($ratings['rotten_tomatoes']);
+    }
+
+    /**
+     * Test parseFraction returns null for invalid format (no /100).
+     */
+    public function test_parse_fraction_returns_null_for_invalid_format(): void
+    {
+        $details = [
+            'imdbRating' => 'N/A',
+            'Ratings' => [
+                ['Source' => 'Metacritic', 'Value' => '72'], // Missing /100
+            ],
+        ];
+
+        $ratings = OmdbApi::extractRatings($details);
+
+        $this->assertNull($ratings['metascore']);
+    }
+
+    /**
+     * Test parseFraction returns null for malformed fraction.
+     */
+    public function test_parse_fraction_returns_null_for_malformed_value(): void
+    {
+        $details = [
+            'imdbRating' => 'N/A',
+            'Ratings' => [
+                ['Source' => 'Metacritic', 'Value' => '100/72'], // Reversed
+            ],
+        ];
+
+        $ratings = OmdbApi::extractRatings($details);
+
+        $this->assertNull($ratings['metascore']);
+    }
+
+    /**
+     * Test getHttpClient creates client with SSL verification disabled.
+     * This exercises the verify_ssl = false path in getHttpClient.
+     * Note: We cannot directly inspect Workerman\Client internals, but we verify
+     * the method executes without error and returns a valid client.
+     */
+    public function test_get_http_client_disables_ssl_verification(): void
+    {
+        $api = new OmdbApi('key', false, 0); // useSslVerification = false
+
+        $method = new \ReflectionMethod(OmdbApi::class, 'getHttpClient');
+        $method->setAccessible(true);
+        $client = $method->invoke($api);
+
+        $this->assertInstanceOf(\Workerman\Http\Client::class, $client);
+        $this->assertNotSame($api, $client);
+    }
+
+    /**
+     * Test getHttpClient returns cached client on subsequent calls.
+     */
+    public function test_get_http_client_returns_same_instance(): void
+    {
+        $api = new OmdbApi('key');
+
+        $method = new \ReflectionMethod(OmdbApi::class, 'getHttpClient');
+        $method->setAccessible(true);
+        $client1 = $method->invoke($api);
+        $client2 = $method->invoke($api);
+
+        $this->assertSame($client1, $client2);
+    }
+
+    /**
+     * Test that extractRatings handles Ratings with non-array elements.
+     * This exercises the !is_array($rating) continue path.
+     */
+    public function test_extract_ratings_skips_non_array_rating_entries(): void
+    {
+        $details = [
+            'imdbRating' => '8.5',
+            'Ratings' => [
+                'not an array',
+                ['Source' => 'Rotten Tomatoes', 'Value' => '91%'],
+                123,
+                null,
+            ],
+        ];
+
+        $ratings = OmdbApi::extractRatings($details);
+
+        $this->assertSame(8.5, $ratings['imdb']);
+        $this->assertSame(9.1, $ratings['rotten_tomatoes']);
+    }
+
+    /**
+     * Test extractRatings handles non-string source/value in ratings.
+     */
+    public function test_extract_ratings_handles_non_string_rating_values(): void
+    {
+        $details = [
+            'imdbRating' => '8.5',
+            'Ratings' => [
+                ['Source' => 123, 'Value' => 456],
+                ['Source' => null, 'Value' => null],
+            ],
+        ];
+
+        $ratings = OmdbApi::extractRatings($details);
+
+        // Should not crash and should return nulls for missing valid ratings
+        $this->assertSame(8.5, $ratings['imdb']);
+        $this->assertNull($ratings['rotten_tomatoes']);
+        $this->assertNull($ratings['metascore']);
+    }
+
+    /**
+     * Test extractRatings handles imdbRating that is non-numeric string.
+     */
+    public function test_extract_ratings_handles_non_numeric_imdb_rating(): void
+    {
+        $details = [
+            'imdbRating' => 'N/A',
+            'Ratings' => [],
+        ];
+
+        $ratings = OmdbApi::extractRatings($details);
+
+        $this->assertNull($ratings['imdb']);
+    }
+
+    /**
+     * Test extractRatings handles numeric but non-string imdbRating.
+     */
+    public function test_extract_ratings_handles_numeric_imdb_rating(): void
+    {
+        $details = [
+            'imdbRating' => 8.8, // Numeric instead of string
+            'Ratings' => [],
+        ];
+
+        $ratings = OmdbApi::extractRatings($details);
+
+        $this->assertNull($ratings['imdb']); // Should be null because it's not a string
+    }
 }
