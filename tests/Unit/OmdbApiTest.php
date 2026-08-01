@@ -175,4 +175,221 @@ final class OmdbApiTest extends TestCase
         $this->assertNotNull($result);
         $this->assertSame('Inception', $result['Title']);
     }
+
+    public function test_search_returns_empty_array_on_null_response(): void
+    {
+        $api = new OmdbApi('key', true, 0, null, static fn(string $url): ?array => null);
+
+        $result = $api->search('Inception');
+
+        $this->assertSame([], $result);
+    }
+
+    public function test_search_returns_empty_array_on_false_response(): void
+    {
+        $api = new OmdbApi('key', true, 0, null, static fn(string $url): ?array => ['Response' => 'False']);
+
+        $result = $api->search('Inception');
+
+        $this->assertSame([], $result);
+    }
+
+    public function test_search_returns_empty_array_when_search_key_missing(): void
+    {
+        $api = new OmdbApi('key', true, 0, null, static fn(string $url): ?array => ['Response' => 'True']);
+
+        $result = $api->search('Inception');
+
+        $this->assertSame([], $result);
+    }
+
+    public function test_search_returns_empty_array_when_results_not_array(): void
+    {
+        $api = new OmdbApi('key', true, 0, null, static fn(string $url): ?array => ['Response' => 'True', 'Search' => 'not an array']);
+
+        $result = $api->search('Inception');
+
+        $this->assertSame([], $result);
+    }
+
+    public function test_search_returns_formatted_results(): void
+    {
+        $data = [
+            'Response' => 'True',
+            'Search' => [
+                ['imdbID' => 'tt1375666', 'Title' => 'Inception', 'Year' => '2010', 'Type' => 'movie'],
+                ['imdbID' => 'tt0816692', 'Title' => 'Interstellar', 'Year' => '2014', 'Type' => 'movie'],
+            ],
+        ];
+        $api = new OmdbApi('key', true, 0, null, static fn(string $url): ?array => $data);
+
+        $result = $api->search('Inception');
+
+        $this->assertCount(2, $result);
+        $this->assertSame('tt1375666', $result[0]['imdb_id']);
+        $this->assertSame('Inception', $result[0]['title']);
+        $this->assertSame('2010', $result[0]['year']);
+        $this->assertSame('movie', $result[0]['type']);
+    }
+
+    public function test_search_skips_results_with_empty_imdb_id(): void
+    {
+        $data = [
+            'Response' => 'True',
+            'Search' => [
+                ['imdbID' => '', 'Title' => 'Inception', 'Year' => '2010', 'Type' => 'movie'],
+                ['imdbID' => 'tt0816692', 'Title' => 'Interstellar', 'Year' => '2014', 'Type' => 'movie'],
+            ],
+        ];
+        $api = new OmdbApi('key', true, 0, null, static fn(string $url): ?array => $data);
+
+        $result = $api->search('Inception');
+
+        $this->assertCount(1, $result);
+        $this->assertSame('tt0816692', $result[0]['imdb_id']);
+    }
+
+    public function test_search_handles_year_parameter(): void
+    {
+        $data = [
+            'Response' => 'True',
+            'Search' => [
+                ['imdbID' => 'tt1375666', 'Title' => 'Inception', 'Year' => '2010', 'Type' => 'movie'],
+            ],
+        ];
+        $capturedUrl = null;
+        $api = new OmdbApi('key', true, 0, null, static function (string $url) use (&$capturedUrl, $data): ?array {
+            $capturedUrl = $url;
+            return $data;
+        });
+
+        $api->search('Inception', 2010);
+
+        $this->assertNotNull($capturedUrl);
+        $this->assertStringContainsString('y=2010', $capturedUrl);
+    }
+
+    public function test_search_skips_non_array_results(): void
+    {
+        $data = [
+            'Response' => 'True',
+            'Search' => [
+                'not an array',
+                ['imdbID' => 'tt1375666', 'Title' => 'Inception', 'Year' => '2010', 'Type' => 'movie'],
+            ],
+        ];
+        $api = new OmdbApi('key', true, 0, null, static fn(string $url): ?array => $data);
+
+        $result = $api->search('Inception');
+
+        $this->assertCount(1, $result);
+        $this->assertSame('tt1375666', $result[0]['imdb_id']);
+    }
+
+    public function test_get_by_imdb_id_returns_null_on_null_response(): void
+    {
+        $api = new OmdbApi('key', true, 0, null, static fn(string $url): ?array => null);
+
+        $result = $api->getByImdbId('tt1375666');
+
+        $this->assertNull($result);
+    }
+
+    public function test_get_by_imdb_id_returns_null_on_false_response(): void
+    {
+        $api = new OmdbApi('key', true, 0, null, static fn(string $url): ?array => ['Response' => 'False']);
+
+        $result = $api->getByImdbId('tt1375666');
+
+        $this->assertNull($result);
+    }
+
+    public function test_get_by_imdb_id_returns_full_details(): void
+    {
+        $data = [
+            'Response' => 'True',
+            'Title' => 'Inception',
+            'Year' => '2010',
+            'Rated' => 'PG-13',
+            'Released' => '16 Jul 2010',
+            'Runtime' => '148 min',
+            'Genre' => 'Action, Adventure, Sci-Fi',
+            'Director' => 'Christopher Nolan',
+            'Writer' => 'Christopher Nolan',
+            'Actors' => 'Leonardo DiCaprio, Joseph Gordon-Levitt, Elliot Page',
+            'Plot' => 'A thief who steals corporate secrets through dream-sharing technology.',
+            'Language' => 'English, Japanese, French',
+            'Country' => 'United States, United Kingdom',
+            'Awards' => 'Won 4 Oscars. 157 wins & 220 nominations total.',
+            'Poster' => 'https://example.com/poster.jpg',
+            'Type' => 'movie',
+            'imdbRating' => '8.8',
+        ];
+        $api = new OmdbApi('key', true, 0, null, static fn(string $url): ?array => $data);
+
+        $result = $api->getByImdbId('tt1375666');
+
+        $this->assertNotNull($result);
+        $this->assertSame('Inception', $result['Title']);
+        $this->assertSame('2010', $result['Year']);
+        $this->assertSame('PG-13', $result['Rated']);
+        $this->assertSame('148 min', $result['Runtime']);
+        $this->assertSame('movie', $result['Type']);
+    }
+
+    public function test_clear_cache_clears_internal_cache(): void
+    {
+        $data = ['Response' => 'True', 'Title' => 'Inception', 'imdbRating' => '8.8'];
+        $api = new OmdbApi('key', true, 3600, null, static fn(string $url): ?array => $data);
+
+        // First call populates cache
+        $api->getByImdbId('tt1375666');
+
+        // Verify cache is populated by checking it returns cached data
+        // We need to test clearCache works - use reflection to check cache state
+        $reflection = new \ReflectionClass($api);
+        $cacheProperty = $reflection->getProperty('cache');
+        $cacheProperty->setAccessible(true);
+
+        // Cache should have entries after getByImdbId
+        $cacheBefore = $cacheProperty->getValue($api);
+        $this->assertNotEmpty($cacheBefore);
+
+        // Clear the cache
+        $api->clearCache();
+
+        // Cache should be empty after clear
+        $cacheAfter = $cacheProperty->getValue($api);
+        $this->assertSame([], $cacheAfter);
+    }
+
+    public function test_parse_percentage_handles_decimal_percentages(): void
+    {
+        $details = [
+            'imdbRating' => 'N/A',
+            'Ratings' => [
+                ['Source' => 'Rotten Tomatoes', 'Value' => '92.5%'],
+            ],
+        ];
+
+        $ratings = OmdbApi::extractRatings($details);
+
+        // 92.5% / 10 = 9.25, which rounds to 9.3
+        $this->assertEqualsWithDelta(9.3, $ratings['rotten_tomatoes'], 0.01);
+    }
+
+    public function test_parse_fraction_handles_decimal_fractions(): void
+    {
+        $details = [
+            'imdbRating' => 'N/A',
+            'Ratings' => [
+                ['Source' => 'Metacritic', 'Value' => '85.5/100'],
+            ],
+        ];
+
+        $ratings = OmdbApi::extractRatings($details);
+
+        // 85.5 / 10 = 8.55, which rounds to 8.6
+        $this->assertEqualsWithDelta(8.6, $ratings['metascore'], 0.01);
+    }
 }
