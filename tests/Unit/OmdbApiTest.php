@@ -862,4 +862,79 @@ final class OmdbApiTest extends TestCase
 
         $this->assertGreaterThanOrEqual($initialTimestamp, $newTimestamp);
     }
+
+    /**
+     * Test that httpGetJson returns cached response on cache hit.
+     * This exercises the cache retrieval path when cache is warm.
+     */
+    public function test_http_get_json_returns_cached_response_on_cache_hit(): void
+    {
+        $callCount = 0;
+        $data = ['Response' => 'True', 'Title' => 'Inception', 'imdbRating' => '8.8'];
+
+        $api = new OmdbApi('key', true, 3600, null, static function (string $url) use (&$callCount, $data): ?array {
+            $callCount++;
+            return $data;
+        });
+
+        // First call - populates cache
+        $api->getByImdbId('tt1375666');
+        $this->assertSame(1, $callCount);
+
+        // Second call - should hit cache and not call jsonFetcher again
+        $api->getByImdbId('tt1375666');
+        $this->assertSame(1, $callCount, 'Second call should use cached response');
+    }
+
+    /**
+     * Test that cache is NOT used when cache entry is expired.
+     * This exercises the cache TTL expiration path.
+     */
+    public function test_http_get_json_does_not_use_expired_cache(): void
+    {
+        $callCount = 0;
+        $data = ['Response' => 'True', 'Title' => 'Inception', 'imdbRating' => '8.8'];
+
+        // Create API with cacheTtlSeconds = 1 (1 second TTL)
+        $api = new OmdbApi('key', true, 1, null, static function (string $url) use (&$callCount, $data): ?array {
+            $callCount++;
+            return $data;
+        });
+
+        // First call - populates cache
+        $api->getByImdbId('tt1375666');
+        $this->assertSame(1, $callCount);
+
+        // Wait for cache to expire
+        usleep(1_200_000); // 1.2 seconds
+
+        // Second call - cache should be expired, jsonFetcher called again
+        $api->getByImdbId('tt1375666');
+        $this->assertSame(2, $callCount, 'Expired cache should trigger new request');
+    }
+
+    /**
+     * Test that getHttpClient creates client with default timeout.
+     */
+    public function test_get_http_client_has_default_timeout(): void
+    {
+        $api = new OmdbApi('key', true, 0);
+
+        $method = new \ReflectionMethod(OmdbApi::class, 'getHttpClient');
+        $method->setAccessible(true);
+        $client = $method->invoke($api);
+
+        $this->assertInstanceOf(\Workerman\Http\Client::class, $client);
+    }
+
+    /**
+     * Test that API_BASE constant is correct.
+     */
+    public function test_api_base_url_is_correct(): void
+    {
+        $reflection = new \ReflectionClass(OmdbApi::class);
+        $base = $reflection->getConstant('API_BASE');
+
+        $this->assertSame('https://www.omdbapi.com', $base);
+    }
 }

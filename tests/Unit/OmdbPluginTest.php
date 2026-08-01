@@ -698,4 +698,111 @@ final class OmdbPluginTest extends TestCase
 
         $this->assertSame([], $result);
     }
+
+    /**
+     * Test getSettings returns the same settings object that was passed to constructor.
+     */
+    public function test_getSettings_returns_constructor_settings(): void
+    {
+        $settings = new OmdbSettings(enabled: true, apiKey: 'test_key', useSslVerification: false, cacheTtlSeconds: 7200);
+        $plugin = new OmdbPlugin($settings);
+
+        $retrievedSettings = $plugin->getSettings();
+
+        $this->assertSame($settings, $retrievedSettings);
+        $this->assertSame('test_key', $retrievedSettings->apiKey);
+        $this->assertFalse($retrievedSettings->useSslVerification);
+        $this->assertSame(7200, $retrievedSettings->cacheTtlSeconds);
+    }
+
+    /**
+     * Test getSettings returns new OmdbSettings when none was passed and settings was never configured.
+     */
+    public function test_getSettings_returns_default_when_no_settings(): void
+    {
+        $plugin = new OmdbPlugin();
+
+        $settings = $plugin->getSettings();
+
+        $this->assertInstanceOf(OmdbSettings::class, $settings);
+        $this->assertFalse($settings->enabled);
+        $this->assertNull($settings->apiKey);
+    }
+
+    /**
+     * Test that onDisable does not throw when api is null.
+     */
+    public function test_onDisable_does_not_throw_when_api_is_null(): void
+    {
+        $plugin = new OmdbPlugin(new OmdbSettings(enabled: true, apiKey: 'key'));
+
+        // onDisable should not throw even though api was never created
+        $plugin->onDisable();
+
+        $this->assertTrue(true);
+    }
+
+    /**
+     * Test that onEnable does not overwrite an existing logger.
+     */
+    public function test_onEnable_does_not_overwrite_existing_logger(): void
+    {
+        $customLogger = new class extends \Psr\Log\AbstractLogger {
+            public function log($level, string|\Stringable $message, array $context = []): void {}
+        };
+
+        $plugin = new OmdbPlugin(new OmdbSettings(enabled: true, apiKey: 'key'), $customLogger);
+
+        // Use reflection to check the logger before onEnable
+        $reflection = new \ReflectionClass($plugin);
+        $loggerProperty = $reflection->getProperty('logger');
+        $loggerProperty->setAccessible(true);
+        $loggerBefore = $loggerProperty->getValue($plugin);
+
+        $plugin->onEnable($this->makeContainer());
+
+        $loggerAfter = $loggerProperty->getValue($plugin);
+
+        // The existing custom logger should NOT be overwritten by NullLogger from container
+        $this->assertSame($customLogger, $loggerAfter, 'Existing logger should not be overwritten');
+    }
+
+    /**
+     * Test that getDetails returns empty array when api returns null for getByImdbId.
+     */
+    public function test_getDetails_returns_empty_when_api_returns_null(): void
+    {
+        $api = new OmdbApi('key', true, 0, null, static fn(string $url): ?array => null);
+        $plugin = new OmdbPlugin(new OmdbSettings(enabled: true, apiKey: 'key'), null, $api);
+
+        $result = $plugin->getDetails('tt1375666');
+
+        $this->assertSame([], $result);
+    }
+
+    /**
+     * Test that getImages returns empty when api returns null for getByImdbId.
+     */
+    public function test_getImages_returns_empty_when_api_returns_null(): void
+    {
+        $api = new OmdbApi('key', true, 0, null, static fn(string $url): ?array => null);
+        $plugin = new OmdbPlugin(new OmdbSettings(enabled: true, apiKey: 'key'), null, $api);
+
+        $result = $plugin->getImages('tt1375666');
+
+        $this->assertSame([], $result);
+    }
+
+    /**
+     * Test that search handles the case where api returns null.
+     */
+    public function test_search_returns_empty_when_api_returns_null(): void
+    {
+        $api = new OmdbApi('key', true, 0, null, static fn(string $url): ?array => null);
+        $plugin = new OmdbPlugin(new OmdbSettings(enabled: true, apiKey: 'key'), null, $api);
+
+        $result = $plugin->search('Inception');
+
+        $this->assertSame([], $result);
+    }
 }
