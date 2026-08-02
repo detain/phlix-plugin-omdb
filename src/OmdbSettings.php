@@ -25,10 +25,10 @@ final readonly class OmdbSettings
      * @param int          $cacheTtlSeconds     Cache TTL in seconds
      */
     public function __construct(
-        public bool $enabled=false,
-        public ?string $apiKey=null,
-        public bool $useSslVerification=true,
-        public int $cacheTtlSeconds=86400,
+        public bool $enabled = false,
+        public ?string $apiKey = null,
+        public bool $useSslVerification = true,
+        public int $cacheTtlSeconds = 86400,
     ) {
     }
 

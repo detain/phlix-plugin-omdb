@@ -309,7 +309,7 @@ final class OmdbPlugin implements ConfigurableInterface, LifecycleInterface, Met
             'language'  => $details['Language'] ?? '',
             'country'   => $details['Country'] ?? '',
             'awards'    => $details['Awards'] ?? '',
-            'poster_url'=> $details['Poster'] ?? '',
+            'poster_url' => $details['Poster'] ?? '',
             'type'      => $details['Type'] ?? '',
             'ratings'   => $ratingList,
         ];

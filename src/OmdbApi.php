@@ -83,10 +83,10 @@ final class OmdbApi
      */
     public function __construct(
         private readonly string $apiKey,
-        private readonly bool $useSslVerification=true,
-        private readonly int $cacheTtlSeconds=86400,
-        private readonly ?LoggerInterface $logger=null,
-        ?\Closure $jsonFetcher=null,
+        private readonly bool $useSslVerification = true,
+        private readonly int $cacheTtlSeconds = 86400,
+        private readonly ?LoggerInterface $logger = null,
+        ?\Closure $jsonFetcher = null,
     ) {
         $this->jsonFetcher = $jsonFetcher;
         $this->timerSleep = static function (float $seconds): void {
