@@ -73,7 +73,12 @@ composer install
 vendor/bin/phpunit
 vendor/bin/phpstan analyse src --level=9
 vendor/bin/phpcs src --standard=PSR12
+php scripts/security-audit-check.php
 ```
+
+The `composer-audit` job in `.github/workflows/test.yml` runs
+`php scripts/security-audit-check.php`, which audits the whole `composer.lock`
+(`require` and `require-dev`) and blocks on any advisory.
 
 ## License
 
