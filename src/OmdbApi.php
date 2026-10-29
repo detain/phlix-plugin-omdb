@@ -468,7 +468,7 @@ final class OmdbApi
         $resetsAt = intdiv($this->utcNow() + self::UTC_DAY_SECONDS, self::UTC_DAY_SECONDS) * self::UTC_DAY_SECONDS;
         $this->overLimitCooldownUntil = $resetsAt;
 
-        $this->logger?->warning('OMDb API key is over its daily limit; cooling down requests until the UTC day rolls over', [
+        $this->logger?->warning('OMDb API key is over its daily limit; cooldown armed until the UTC day rolls over', [
             'url' => self::redactSecrets($url),
             'cooldown_until_utc' => gmdate('Y-m-d H:i:s', $resetsAt),
             'cooldown_seconds' => $resetsAt - $this->utcNow(),
