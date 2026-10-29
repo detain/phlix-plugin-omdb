@@ -1060,6 +1060,224 @@ final class OmdbApiTest extends TestCase
     }
 
     /**
+     * M2 (review omdb__secaudit): OMDb's over-limit envelope — delivered as
+     * HTTP 200 or 403 with this JSON body, which the transport surfaces
+     * identically — must NOT masquerade as a plain "title not found": it
+     * raises a distinguishable warning and presents as null to the caller.
+     */
+    public function test_over_limit_envelope_logs_distinguishable_warning_and_returns_null(): void
+    {
+        $logger = new OmdbCapturingLogger();
+        $api = new OmdbApi(self::CANARY_KEY, true, 0, $logger, static fn (string $url): ?array => [
+            'Response' => 'False',
+            'Error' => 'API key is over its daily limit.',
+        ]);
+
+        $details = $api->getByImdbId('tt1375666');
+
+        $this->assertNull($details);
+        $this->assertCount(1, $logger->records);
+        [$message, $context] = $logger->records[0];
+        $this->assertStringContainsString('over its daily limit', $message);
+        $this->assertArrayHasKey('cooldown_seconds', $context);
+        // C1 custody law applies to every sink, including the new one.
+        $this->assertStringNotContainsString(self::CANARY_KEY, (string) json_encode($context));
+    }
+
+    /**
+     * The alternate historical OMDb wording ("rate limit") classifies the
+     * same way, and the search entry point arms the cooldown too.
+     */
+    public function test_over_limit_search_path_returns_empty_and_arms_cooldown(): void
+    {
+        $api = new OmdbApi('key', true, 0, null, static fn (string $url): ?array => [
+            'Response' => 'False',
+            'Error' => 'API rate limit exceeded.',
+        ]);
+
+        $this->assertSame([], $api->search('Inception'));
+        $this->assertTrue($api->isOverLimitCoolingDown());
+    }
+
+    /**
+     * Retry-storm prevention: once the key is over its limit, no further
+     * request leaves the client today — every later miss short-circuits.
+     */
+    public function test_over_limit_cooldown_suppresses_further_requests(): void
+    {
+        $calls = 0;
+        $api = new OmdbApi('key', true, 0, null, static function (string $url) use (&$calls): ?array {
+            $calls++;
+            if ($calls === 1) {
+                return ['Response' => 'False', 'Error' => 'API key is over its daily limit.'];
+            }
+
+            return ['Response' => 'True', 'Title' => 'Never Served'];
+        });
+
+        $this->assertNull($api->getByImdbId('tt1375666'));
+        $this->assertNull($api->getByImdbId('tt0816692'));
+        $this->assertSame([], $api->search('Inception'));
+
+        $this->assertSame(1, $calls, 'Cooldown must not fire a spent key again');
+    }
+
+    /**
+     * The cooldown gates dispatch only: warm cache entries cost zero quota
+     * and must keep being served while the key rests.
+     */
+    public function test_over_limit_cooldown_still_serves_cache_hits(): void
+    {
+        $inception = ['Response' => 'True', 'Title' => 'Inception'];
+        $calls = 0;
+        $api = new OmdbApi('key', true, 3600, null, static function (string $url) use (&$calls, $inception): ?array {
+            $calls++;
+            if (str_contains($url, 'i=tt1375666') === true) {
+                return $inception;
+            }
+
+            return ['Response' => 'False', 'Error' => 'API key is over its daily limit.'];
+        });
+        $this->neutralizeRateLimitSleep($api);
+
+        $this->assertNotNull($api->getByImdbId('tt1375666'));
+        $this->assertNull($api->getByImdbId('tt0816692'));
+        $this->assertTrue($api->isOverLimitCoolingDown());
+
+        $cached = $api->getByImdbId('tt1375666');
+
+        $this->assertNotNull($cached);
+        $this->assertSame('Inception', $cached['Title']);
+        $this->assertSame(2, $calls);
+    }
+
+    /**
+     * A limit error must never be cached: a day-TTL "not found" lie would
+     * outlive the quota reset and re-mask the breach.
+     */
+    public function test_over_limit_envelope_is_never_cached(): void
+    {
+        $api = new OmdbApi('key', true, 3600, null, static fn (string $url): ?array => [
+            'Response' => 'False',
+            'Error' => 'API key is over its daily limit.',
+        ]);
+
+        $api->getByImdbId('tt1375666');
+
+        $cache = new \ReflectionProperty(OmdbApi::class, 'cache');
+        $cache->setAccessible(true);
+
+        $this->assertSame([], $cache->getValue($api));
+    }
+
+    /**
+     * Complement pin: a plain not-found keeps its old silent behavior — no
+     * warning, no cooldown — and (as before this fix) IS cached, amortizing
+     * quota for repeated lookups of the same missing title.
+     */
+    public function test_not_found_envelope_stays_silent_and_does_not_arm_cooldown(): void
+    {
+        $logger = new OmdbCapturingLogger();
+        $api = new OmdbApi('key', true, 3600, $logger, static fn (string $url): ?array => [
+            'Response' => 'False',
+            'Error' => 'Title not found.',
+        ]);
+
+        $this->assertNull($api->getByImdbId('tt0000000'));
+        $this->assertFalse($api->isOverLimitCoolingDown());
+        $this->assertSame([], $logger->records);
+
+        $cache = new \ReflectionProperty(OmdbApi::class, 'cache');
+        $cache->setAccessible(true);
+        $this->assertNotEmpty($cache->getValue($api));
+    }
+
+    /**
+     * Suppressed dispatch is logged, not swallowed — the caller-visible null
+     * stays explainable in the log stream.
+     */
+    public function test_suppressed_request_is_logged_not_silent(): void
+    {
+        $logger = new OmdbCapturingLogger();
+        $api = new OmdbApi(self::CANARY_KEY, true, 0, $logger, static fn (string $url): ?array => [
+            'Response' => 'False',
+            'Error' => 'API key is over its daily limit.',
+        ]);
+
+        $api->getByImdbId('tt1375666');
+        $api->getByImdbId('tt0816692');
+
+        $this->assertCount(2, $logger->records);
+        $this->assertStringContainsString('suppressed', $logger->records[1][0]);
+        $this->assertStringNotContainsString(self::CANARY_KEY, (string) json_encode($logger->records));
+    }
+
+    /**
+     * The breach resets the day boundary, so the cooldown must expire at the
+     * next UTC midnight exactly (whole-day aligned epoch instant, in future).
+     */
+    public function test_cooldown_expires_at_next_utc_midnight(): void
+    {
+        $api = new OmdbApi('key', true, 0, null, static fn (string $url): ?array => [
+            'Response' => 'False',
+            'Error' => 'API key is over its daily limit.',
+        ]);
+
+        $api->getByImdbId('tt1375666');
+
+        $until = new \ReflectionProperty(OmdbApi::class, 'overLimitCooldownUntil');
+        $until->setAccessible(true);
+        /** @var int $value */
+        $value = $until->getValue($api);
+
+        $this->assertGreaterThan(time(), $value);
+        $this->assertLessThanOrEqual(time() + 86400, $value);
+        $this->assertSame(0, $value % 86400);
+    }
+
+    /**
+     * After the rollover the client dispatches again (a fresh day, fresh
+     * allowance): expiry of the cooldown resumes normal request flow.
+     */
+    public function test_cooldown_expiry_resumes_requests(): void
+    {
+        $calls = 0;
+        $api = new OmdbApi('key', true, 0, null, static function (string $url) use (&$calls): ?array {
+            $calls++;
+            if ($calls === 1) {
+                return ['Response' => 'False', 'Error' => 'API key is over its daily limit.'];
+            }
+
+            return ['Response' => 'True', 'Title' => 'Inception'];
+        });
+        $this->neutralizeRateLimitSleep($api);
+
+        $this->assertNull($api->getByImdbId('tt1375666'));
+        $this->assertTrue($api->isOverLimitCoolingDown());
+
+        $until = new \ReflectionProperty(OmdbApi::class, 'overLimitCooldownUntil');
+        $until->setAccessible(true);
+        $until->setValue($api, time() - 1);
+
+        $result = $api->getByImdbId('tt1375666');
+
+        $this->assertNotNull($result);
+        $this->assertSame(2, $calls);
+    }
+
+    /**
+     * Replace the rate-limit sleep with a no-op so tests dispatching twice in
+     * one tick do not depend on the host-provided Timer::sleep().
+     */
+    private function neutralizeRateLimitSleep(OmdbApi $api): void
+    {
+        $sleep = new \ReflectionProperty(OmdbApi::class, 'timerSleep');
+        $sleep->setAccessible(true);
+        $sleep->setValue($api, static function (float $seconds): void {
+        });
+    }
+
+    /**
      * Drive the real-HTTP error path by injecting a synchronously failing client.
      */
     private function injectFailingClient(OmdbApi $api, ?string $messageTemplate = null): void

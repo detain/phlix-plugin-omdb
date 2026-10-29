@@ -35,7 +35,7 @@ use Psr\Log\NullLogger;
  * - Ratings emitted enum-safe: IMDb -> `imdb`, Rotten Tomatoes -> `rt`
  *   (Metascore has no valid ENUM member and is dropped)
  * - Non-blocking async HTTP via Workerman/http-client (HTTPS only)
- * - Configurable rate limiting and response caching
+ * - Configurable rate limiting, response caching, and daily-limit cooldown
  * - TLS verification toggle for self-hosted proxies
  * - onEnable is a cheap wire-only step: no network, no DB, never throws
  *

@@ -20,8 +20,23 @@ use Workerman\Timer;
 /**
  * HTTP client for the OMDb API.
  *
- * Provides search, title lookup, and handles rate limiting, caching,
- * SSL verification toggling, and async/non-blocking patterns.
+ * Provides search, title lookup, and handles rate limiting, daily-limit
+ * cooldown, caching, SSL verification toggling, and async/non-blocking
+ * patterns.
+ *
+ * ## Daily-limit posture (free tier: 1000 requests/day)
+ *
+ * OMDb signals quota exhaustion with a `{"Response":"False","Error":"API key
+ * is over its daily limit."}` envelope (as HTTP 200 or 403 — the vendored
+ * transport surfaces both identically). {@see httpGetJson()} classifies that
+ * envelope apart from a plain "title not found", logs a distinguishable
+ * warning, and cools the key down until the next UTC midnight (the reset
+ * boundary): further cache-missing lookups short-circuit without touching the
+ * network, so one dead key cannot turn into a retry-storm against a wall.
+ * The cooldown is process-local by design — the plugin owns no cross-worker
+ * store (persisting across restarts is a known follow-up); the host-side
+ * `SourceRateLimiter` in phlix-server paces dispatch (~90s spacing for omdb)
+ * as the belt, this cooldown is the braces.
  */
 final class OmdbApi
 {
@@ -46,6 +61,18 @@ final class OmdbApi
     public const MASKED_APIKEY = '***';
 
     /**
+     * Lower-cased substrings of the envelope Error field that mean "this key
+     * has spent its daily request allowance" (OMDb has shipped both the
+     * "daily limit" and the "rate limit" wording).
+     *
+     * @var list<string>
+     */
+    private const OVER_LIMIT_ERROR_MARKERS = ['daily limit', 'rate limit'];
+
+    /** Seconds in a UTC day; OMDb daily limits roll over at UTC midnight. */
+    private const UTC_DAY_SECONDS = 86400;
+
+    /**
      * In-memory response cache: md5(url) => decoded JSON array.
      *
      * @var array<string, array<string, mixed>>
@@ -56,6 +83,13 @@ final class OmdbApi
      * Unix timestamp (with microseconds) of the last API request, for rate limiting.
      */
     private float $lastRequestTimestamp = 0.0;
+
+    /**
+     * Unix (UTC) timestamp until which HTTP dispatch is suppressed after an
+     * over-limit response; 0 when never armed. Process-local by design — see
+     * the class docblock's daily-limit posture.
+     */
+    private int $overLimitCooldownUntil = 0;
 
     /**
      * Sleep function for rate-limit delays.
@@ -280,7 +314,11 @@ final class OmdbApi
     /**
      * Perform a GET request and decode the JSON body.
      *
-     * Applies rate limiting, in-memory cache, and optional SSL verification.
+     * Applies the daily-limit cooldown gate, rate limiting, in-memory cache,
+     * and optional SSL verification. Over-limit envelopes are surfaced as a
+     * distinguishable warning + null (never a stale cached not-found); plain
+     * negative envelopes flow through to the callers unchanged (and are
+     * cached, which amortizes quota).
      *
      * @param string $url Absolute OMDb API URL
      * @return array<string, mixed>|null Decoded JSON or null on failure
@@ -297,17 +335,23 @@ final class OmdbApi
             }
         }
 
+        // Cache hits above cost zero quota; misses during a cooldown must not
+        // burn the dead key again until its UTC-day reset.
+        if ($this->overLimitCooldownUntil > time()) {
+            $this->logger?->info('OMDb request suppressed: API key over its daily limit (cooldown active)', [
+                'url' => self::redactSecrets($url),
+            ]);
+
+            return null;
+        }
+
         $this->enforceRateLimit();
 
         if ($this->jsonFetcher !== null) {
             /** @var array<string, mixed>|null $response */
             $response = ($this->jsonFetcher)($url);
-            if ($response !== null && $this->cacheTtlSeconds > 0) {
-                $response['_cached_at'] = $this->clock();
-                $this->cache[$cacheKey] = $response;
-            }
 
-            return $response;
+            return $this->admitResponse($response, $url, $cacheKey);
         }
 
         $state = ['response' => null, 'error' => null, 'done' => false];
@@ -349,12 +393,106 @@ final class OmdbApi
         /** @var array<string, mixed>|null $response */
         $response = $state['response'];
 
-        if ($response !== null && $this->cacheTtlSeconds > 0) {
+        return $this->admitResponse($response, $url, $cacheKey);
+    }
+
+    /**
+     * Admit a decoded response to the caller (and the cache) — or reject it.
+     *
+     * The single choke point both transports (test seam and Workerman client)
+     * funnel through: an over-limit envelope is never cached (a day-stale
+     * "not found" lie is the failure mode this prevents) and never returned
+     * verbatim; it arms the cooldown and presents as null, matching the
+     * client's existing silent-null failure taxonomy while the warning log
+     * keeps it distinguishable from a real not-found.
+     *
+     * @param array<string, mixed>|null $response Decoded JSON body or null
+     * @param string $url Request URL, for the log surface
+     * @param string $cacheKey Cache slot for this URL
+     * @return array<string, mixed>|null The response, or null when rejected
+     */
+    private function admitResponse(?array $response, string $url, string $cacheKey): ?array
+    {
+        if ($response === null) {
+            return null;
+        }
+
+        if (self::isOverLimitEnvelope($response)) {
+            $this->armOverLimitCooldown($url);
+
+            return null;
+        }
+
+        if ($this->cacheTtlSeconds > 0) {
             $response['_cached_at'] = $this->clock();
             $this->cache[$cacheKey] = $response;
         }
 
         return $response;
+    }
+
+    /**
+     * Whether a decoded envelope is OMDb's "key spent its daily quota" signal
+     * rather than a plain not-found.
+     *
+     * @param array<string, mixed> $data Decoded JSON envelope
+     */
+    private static function isOverLimitEnvelope(array $data): bool
+    {
+        if (($data['Response'] ?? '') !== 'False') {
+            return false;
+        }
+
+        $error = $data['Error'] ?? null;
+
+        if (is_string($error) === false) {
+            return false;
+        }
+
+        $needle = strtolower($error);
+
+        foreach (self::OVER_LIMIT_ERROR_MARKERS as $marker) {
+            if (str_contains($needle, $marker) === true) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Arm the key cooldown until the next UTC midnight and log the breach.
+     */
+    private function armOverLimitCooldown(string $url): void
+    {
+        $resetsAt = intdiv($this->utcNow() + self::UTC_DAY_SECONDS, self::UTC_DAY_SECONDS) * self::UTC_DAY_SECONDS;
+        $this->overLimitCooldownUntil = $resetsAt;
+
+        $this->logger?->warning('OMDb API key is over its daily limit; cooling down requests until the UTC day rolls over', [
+            'url' => self::redactSecrets($url),
+            'cooldown_until_utc' => gmdate('Y-m-d H:i:s', $resetsAt),
+            'cooldown_seconds' => $resetsAt - $this->utcNow(),
+        ]);
+    }
+
+    /**
+     * Wall-clock seconds since the epoch, UTC-epoch based (time()).
+     *
+     * The cooldown boundary is a calendar instant (UTC midnight), so it must
+     * use the wall clock; the response cache deliberately keeps using the
+     * monotonic {@see clock()} because it never crosses process meaning.
+     */
+    private function utcNow(): int
+    {
+        return time();
+    }
+
+    /**
+     * Whether the daily-limit cooldown is currently suppressing dispatch.
+     */
+    public function isOverLimitCoolingDown(): bool
+    {
+        return $this->overLimitCooldownUntil > $this->utcNow();
     }
 
     /**
