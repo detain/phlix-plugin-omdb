@@ -41,6 +41,11 @@ final class OmdbApi
     private const RATE_LIMIT_INTERVAL_SEC = 0.25;
 
     /**
+     * Mask written in place of the apikey value on every log/exception surface.
+     */
+    public const MASKED_APIKEY = '***';
+
+    /**
      * In-memory response cache: md5(url) => decoded JSON array.
      *
      * @var array<string, array<string, mixed>>
@@ -258,6 +263,21 @@ final class OmdbApi
     }
 
     /**
+     * Mask the apikey parameter wherever it appears in a string.
+     *
+     * OMDb authenticates with a query-string key, so any URL (or exception
+     * message embedding one) must pass through here before it can reach a
+     * log or exception surface. The masked run stops at the first delimiter a
+     * percent-encoded value can never contain ('&', whitespace, a quote, or
+     * the '#' fragment start) so surrounding diagnostics stay readable; '='
+     * deliberately stays inside the run because a copied URL could carry it.
+     */
+    private static function redactSecrets(string $text): string
+    {
+        return (string) preg_replace('/apikey=[^&\s"\'#]+/i', 'apikey=' . self::MASKED_APIKEY, $text);
+    }
+
+    /**
      * Perform a GET request and decode the JSON body.
      *
      * Applies rate limiting, in-memory cache, and optional SSL verification.
@@ -315,9 +335,12 @@ final class OmdbApi
         if ($state['error'] !== null) {
             $error = $state['error'];
             $errorMessage = $error instanceof \Throwable ? $error->getMessage() : 'Unknown error';
+            // Both values below can carry the key-bearing request URL (the URL
+            // itself, or an exception message that embeds it) — redact at the
+            // sink so the secret never reaches a log stream. Review omdb__srphp C1.
             $this->logger?->warning('OMDb HTTP error', [
-                'url' => $url,
-                'error' => $errorMessage,
+                'url' => self::redactSecrets($url),
+                'error' => self::redactSecrets($errorMessage),
             ]);
 
             return null;

@@ -12,10 +12,18 @@ declare(strict_types=1);
 namespace Phlix\Plugins\Metadata\Omdb\Tests;
 
 use Phlix\Plugins\Metadata\Omdb\OmdbApi;
+use Phlix\Plugins\Metadata\Omdb\Tests\Support\OmdbCapturingLogger;
+use Phlix\Plugins\Metadata\Omdb\Tests\Support\OmdbFakeHttpClient;
 use PHPUnit\Framework\TestCase;
 
 final class OmdbApiTest extends TestCase
 {
+    /**
+     * Canary secret. Every redaction assertion checks this exact substring is
+     * absent from log surfaces; tests never embed a real-looking key elsewhere.
+     */
+    private const CANARY_KEY = 'canary-omdb-key-9f3a7c';
+
     public function test_extract_ratings_parses_imdb_rating(): void
     {
         $details = [
@@ -936,5 +944,129 @@ final class OmdbApiTest extends TestCase
         $base = $reflection->getConstant('API_BASE');
 
         $this->assertSame('https://www.omdbapi.com', $base);
+    }
+
+    /**
+     * C1 (review omdb__srphp): a search failure must never log the apikey value.
+     *
+     * The error sink lives on the real HTTP path of httpGetJson(); a fake
+     * client synchronously fails the request so the sink is reached without
+     * touching the network.
+     */
+    public function test_search_failure_logs_url_without_apikey_value(): void
+    {
+        $logger = new OmdbCapturingLogger();
+        $api = new OmdbApi(self::CANARY_KEY, true, 0, $logger);
+        $this->injectFailingClient($api);
+
+        $results = $api->search('Inception');
+
+        $this->assertSame([], $results);
+        $this->assertCount(1, $logger->records);
+        [$message, $context] = $logger->records[0];
+        $this->assertSame('OMDb HTTP error', $message);
+        $this->assertStringNotContainsString(self::CANARY_KEY, (string) $context['url']);
+        $this->assertStringContainsString('apikey=' . OmdbApi::MASKED_APIKEY, (string) $context['url']);
+        // Diagnostics must survive redaction: host + path + other params stay.
+        $this->assertStringContainsString('https://www.omdbapi.com/?s=Inception', (string) $context['url']);
+    }
+
+    /**
+     * C1 (review omdb__srphp): the detail lookup shares the same sink and the
+     * same leak vector (key-bearing URL built in getByImdbId()).
+     */
+    public function test_get_by_imdb_id_failure_logs_url_without_apikey_value(): void
+    {
+        $logger = new OmdbCapturingLogger();
+        $api = new OmdbApi(self::CANARY_KEY, true, 0, $logger);
+        $this->injectFailingClient($api);
+
+        $details = $api->getByImdbId('tt0120737');
+
+        $this->assertNull($details);
+        $this->assertCount(1, $logger->records);
+        [, $context] = $logger->records[0];
+        $this->assertStringNotContainsString(self::CANARY_KEY, (string) $context['url']);
+        $this->assertStringContainsString('apikey=' . OmdbApi::MASKED_APIKEY, (string) $context['url']);
+        $this->assertStringContainsString('i=tt0120737', (string) $context['url']);
+        $this->assertStringContainsString('plot=full', (string) $context['url']);
+    }
+
+    /**
+     * C1 belt: an exception message that embeds the key-bearing URL must also
+     * reach the log context scrubbed, not verbatim.
+     */
+    public function test_error_message_embedding_the_url_is_scrubbed_in_log_context(): void
+    {
+        $logger = new OmdbCapturingLogger();
+        $api = new OmdbApi(self::CANARY_KEY, true, 0, $logger);
+        $this->injectFailingClient($api, 'Request to {url} timed out after 10 seconds');
+
+        $api->search('Batman');
+
+        $this->assertCount(1, $logger->records);
+        [, $context] = $logger->records[0];
+        $error = (string) $context['error'];
+        $this->assertStringNotContainsString(self::CANARY_KEY, $error);
+        $this->assertStringContainsString('timed out after 10 seconds', $error);
+    }
+
+    /**
+     * Redaction is masking, not deletion: a trailing parameter survives.
+     */
+    public function test_redaction_masks_key_and_preserves_trailing_parameters(): void
+    {
+        $redact = new \ReflectionMethod(OmdbApi::class, 'redactSecrets');
+        $redact->setAccessible(true);
+        /** @var string $masked */
+        $masked = $redact->invoke(null, 'https://x.test/?a=1&apikey=SECRET&plot=full');
+
+        $this->assertSame('https://x.test/?a=1&apikey=' . OmdbApi::MASKED_APIKEY . '&plot=full', $masked);
+    }
+
+    /**
+     * Boundary law: prose around an end-of-string key survives, the mask is
+     * case-insensitive, and a '#' fragment cannot smuggle a key past it.
+     */
+    public function test_redaction_boundaries_and_cases(): void
+    {
+        $redact = new \ReflectionMethod(OmdbApi::class, 'redactSecrets');
+        $redact->setAccessible(true);
+        $mask = 'apikey=' . OmdbApi::MASKED_APIKEY;
+
+        $this->assertSame('boom apikey=*** now', $redact->invoke(null, 'boom apikey=abc123 now'));
+        $this->assertSame($mask, $redact->invoke(null, 'APIKEY=abc123'));
+        $fragmentUrl = 'https://x.test/?apikey=abc#frag';
+        $this->assertSame('https://x.test/?' . $mask . '#frag', $redact->invoke(null, $fragmentUrl));
+        $this->assertSame('no keys here', $redact->invoke(null, 'no keys here'));
+    }
+
+    /**
+     * The request itself keeps the real key — redaction applies to log
+     * surfaces only (pins test_search_includes_api_key_in_url's law).
+     */
+    public function test_request_url_still_carries_the_real_api_key(): void
+    {
+        $client = new OmdbFakeHttpClient();
+        $api = new OmdbApi(self::CANARY_KEY, true, 0, new OmdbCapturingLogger());
+        $property = new \ReflectionProperty(OmdbApi::class, 'httpClient');
+        $property->setAccessible(true);
+        $property->setValue($api, $client);
+
+        $api->search('Batman');
+
+        $this->assertNotNull($client->lastUrl);
+        $this->assertStringContainsString('apikey=' . self::CANARY_KEY, $client->lastUrl);
+    }
+
+    /**
+     * Drive the real-HTTP error path by injecting a synchronously failing client.
+     */
+    private function injectFailingClient(OmdbApi $api, ?string $messageTemplate = null): void
+    {
+        $client = new OmdbFakeHttpClient($messageTemplate);
+        $property = new \ReflectionProperty(OmdbApi::class, 'httpClient');
+        $property->setAccessible(true);
+        $property->setValue($api, $client);
     }
 }
