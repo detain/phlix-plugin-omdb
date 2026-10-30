@@ -1,9 +1,9 @@
 {
     "name": "detain/phlix-plugin-omdb",
     "type": "phlix-plugin",
-    "description": "OMDb metadata provider for Phlix — IMDb/RT/Metascore ratings aggregation for movies and TV.",
+    "description": "OMDb metadata provider for Phlix — IMDb/RT ratings aggregation for movies and TV.",
     "license": "MIT",
-    "keywords": ["phlix", "phlix-plugin", "omdb", "ratings", "imdb", "rotten-tomatoes", "metascore", "metadata", "metadata-provider", "movies", "tv"],
+    "keywords": ["phlix", "phlix-plugin", "omdb", "ratings", "imdb", "rotten-tomatoes", "metadata", "metadata-provider", "movies", "tv"],
     "homepage": "https://github.com/detain/phlix-plugin-omdb",
     "require": {
         "php": ">=8.3",

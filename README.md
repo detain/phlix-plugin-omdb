@@ -2,19 +2,20 @@
 
 [![tests](https://github.com/detain/phlix-plugin-omdb/actions/workflows/test.yml/badge.svg)](https://github.com/detain/phlix-plugin-omdb/actions/workflows/test.yml)
 
-> OMDb metadata provider for [Phlix](https://github.com/detain/phlix) — IMDb/RT/Metascore ratings aggregation for movies and TV.
+> OMDb metadata provider for [Phlix](https://github.com/detain/phlix) — IMDb/RT ratings aggregation for movies and TV.
 
 Queries the [OMDb API](https://www.omdbapi.com/) to enrich Phlix media items with
-IMDb ID, Rotten Tomatoes critic rating, and Metascore ratings. Ratings are
-returned under the valid `metadata_ratings.source` ENUM values (`imdb`, `rt`);
-the host resolver owns writing them and Phlix's rating aggregation.
+IMDb ID and IMDb / Rotten Tomatoes ratings. Ratings are returned under the valid
+`metadata_ratings.source` ENUM values (`imdb`, `rt`); OMDb's Metascore field is
+read but deliberately dropped — the ENUM has no member for it. The host resolver
+owns writing ratings and Phlix's rating aggregation.
 
 ## Features
 
 - **IMDb ID resolution** — search by title + year to resolve the canonical IMDb ID
 - **Multi-source ratings** — captures IMDb and Rotten Tomatoes scores (Metascore is dropped — no valid `metadata_ratings.source` ENUM member)
 - **Non-blocking HTTP** — async HTTPS-only client compatible with Workerman's event loop
-- **Rate limiting** — configurable request throttling to respect OMDb API limits
+- **Rate limiting** — fixed minimum spacing between calls (0.25s), plus an automatic cooldown to the next UTC midnight when OMDb reports a daily-limit envelope; the interval is not a setting
 - **Response caching** — configurable in-memory cache TTL to reduce API calls
 - **TLS verification toggle** — option to disable SSL verification for self-hosted proxies
 - **Pure read** — `getDetails()` fetches and shapes data only; `onEnable()` does no network or DB I/O and never throws on a missing key
