@@ -3,6 +3,7 @@ parameters:
     paths:
         - src
     treatPhpDocTypesAsCertain: false
-    ignoreErrors:
-        # Workerman Timer::sleep() provided by host environment
-        - '#Call to an undefined static method Workerman\\Timer::sleep\(\)#'
+    # Zero ignoreErrors [M-OMDB-13]: the workerman v4-generation Timer::sleep
+    # call is now behind a method_exists() guard phpstan can verify, replacing
+    # the old "provided by host environment" paper-over (an ignore that hid a
+    # latent fatal on the lock generation). Do not add ignores; guard in code.

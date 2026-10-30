@@ -129,10 +129,15 @@ final class OmdbApi
     ) {
         $this->jsonFetcher = $jsonFetcher;
         $this->timerSleep = static function (float $seconds): void {
-            if (class_exists(Timer::class)) {
+            // [M-OMDB-13] Select on the METHOD, not the class: workerman v4
+            // (this repo's lock generation) ships Timer without sleep(), so
+            // class_exists used to green-light a call to a nonexistent
+            // method — fatal the moment the seam ran un-neutralized. v5
+            // hosts get the cooperative sleep; anything older falls back.
+            if (method_exists(Timer::class, 'sleep')) {
                 Timer::sleep($seconds);
             } else {
-                usleep((int) ($seconds * 1_000_000));
+                usleep((int) round($seconds * 1_000_000));
             }
         };
     }
@@ -529,6 +534,17 @@ final class OmdbApi
 
     /**
      * Get or create the shared HTTP client.
+     *
+     * [M-OMDB-13] Library-generation contract: this plugin is TESTED against
+     * the lock generation (workerman/workerman ^4.0 + http-client ^1.0) but
+     * RUNS inside the host worker (workerman 5.x + http-client ^3.x). Only
+     * the surface common to both generations is used: `Client::request($url,
+     * $options)` with 'success'/'error' callbacks and a stream body on the
+     * Response — anything generation-specific (Timer::sleep above, protocol
+     * classes, option keys beyond timeout/verify_ssl) is forbidden in src/.
+     * Aligning require-dev with the host generation would re-resolve the
+     * whole pinned lock (S440 audit-gate churn) — owner-gated, deliberately
+     * not done in a fix lane; the seam tests pin this file's neutrality.
      */
     private function getHttpClient(): Client
     {
@@ -566,7 +582,13 @@ final class OmdbApi
     /**
      * Wait for an async HTTP response.
      *
-     * Uses cooperative yielding when inside a Swoole coroutine.
+     * Every tick goes through the shared {@see $timerSleep} seam — the one
+     * sleep choke the host controls (cooperative Timer::sleep on v5) and
+     * tests neutralize. A raw usleep here bypassed that choke and blocked
+     * the worker instead of yielding. The $waited counter is what enforces
+     * the timeout bound; with the seam neutralized (tests) the loop drains
+     * instantly, and with it honoring time (host) the bound tracks the
+     * deadline the transport itself was configured with.
      *
      * @param array<string, mixed> $state Shared state array
      */
@@ -576,7 +598,7 @@ final class OmdbApi
         $waited = 0.0;
 
         while ($state['done'] === false && $waited < $maxWait) {
-            usleep(10_000); // 10ms
+            ($this->timerSleep)(0.01); // 10ms tick through the seam
             $waited += 0.01;
         }
     }

@@ -1034,6 +1034,74 @@ final class OmdbApiTest extends TestCase
     }
 
     /**
+     * [M-OMDB-08] The poll loop must route every tick through the shared
+     * $timerSleep seam — the single choke the host (and tests) control —
+     * never a raw usleep that bypasses cooperative scheduling. A never-
+     * completing transport returns bounded-fast with null once the seam is
+     * neutralized (test venue: vendored workerman v4 has no Timer::sleep,
+     * so the DEFAULT seam would fatal in the loop — see M-13 gate below).
+     */
+    public function test_wait_for_response_ticks_route_through_the_timer_sleep_seam(): void
+    {
+        $api = new OmdbApi('key', true, 0);
+        $ticks = 0;
+        $sleep = new \ReflectionProperty(OmdbApi::class, 'timerSleep');
+        $sleep->setAccessible(true);
+        $sleep->setValue($api, static function (float $seconds) use (&$ticks): void {
+            $ticks++;
+        });
+        $this->injectClient($api, OmdbFakeHttpClient::neverCompletes());
+
+        $result = $api->getByImdbId('tt1375666');
+
+        $this->assertNull($result, 'A transport that never calls back must resolve to null');
+        $this->assertGreaterThan(0, $ticks, 'waitForResponse must sleep via the shared seam');
+    }
+
+    /**
+     * [M-OMDB-13 gate] The default sleep seam must survive the VENDORED dev
+     * generation (workerman v4 Timer has no sleep() — the previous
+     * class_exists check said "yes" and called a nonexistent method, a fatal
+     * waiting for any caller that enters the seam without neutralizing it).
+     * CI and local suites both run the lock generation, so invoking the
+     * constructed default closure with 0.0 must complete without Error.
+     */
+    public function test_default_timer_seam_survives_generations_without_timer_sleep(): void
+    {
+        $api = new OmdbApi('key', true, 0);
+        $sleep = new \ReflectionProperty(OmdbApi::class, 'timerSleep');
+        $sleep->setAccessible(true);
+        $seam = $sleep->getValue($api);
+        $this->assertInstanceOf(\Closure::class, $seam);
+
+        $seam(0.0);
+    }
+
+    /**
+     * [M-OMDB-13 gate] Source tripwire: the only sleep vectors allowed in
+     * OmdbApi are (1) the seam's method_exists-guarded Timer::sleep arm and
+     * (2) its usleep fallback — no raw usleep may reappear in a poll loop,
+     * and the v4-generation call must stay behind the METHOD guard.
+     */
+    public function test_sleep_vectors_stay_behind_the_generation_guards(): void
+    {
+        $src = (string) file_get_contents(__DIR__ . '/../../src/OmdbApi.php');
+        $this->assertIsString($src);
+
+        $this->assertSame(
+            1,
+            substr_count($src, 'usleep('),
+            'usleep may appear only as the seam fallback'
+        );
+        $this->assertSame(1, substr_count($src, 'Timer::sleep('), 'exactly one guarded Timer::sleep arm');
+        $this->assertMatchesRegularExpression(
+            '/method_exists\(Timer::class,\s*\'sleep\'\)\) \{/',
+            $src,
+            'the Timer::sleep arm must be guarded by method_exists, not class_exists'
+        );
+    }
+
+    /**
      * Test that getHttpClient creates client with default timeout.
      */
     public function test_get_http_client_has_default_timeout(): void
