@@ -222,7 +222,9 @@ final class OmdbPlugin implements ConfigurableInterface, LifecycleInterface, Met
      * Search OMDb for items matching a free-text query.
      *
      * @param string $query Free-text query (e.g., a title parsed from a filename)
-     * @param array<string, mixed> $options Optional hints such as year/language
+     * @param array<string, mixed> $options Optional hints; ONLY 'year' (int)
+     *        is honored — OMDb search takes no language parameter, so a
+     *        'language' hint is silently not forwarded
      * @return list<array{id: non-empty-string, title: string, overview?: string, poster_path?: string}>
      */
     public function search(string $query, array $options = []): array
@@ -243,22 +245,16 @@ final class OmdbPlugin implements ConfigurableInterface, LifecycleInterface, Met
 
         $results = $api->search($query, $year);
 
+        // [M-OMDB-19 minor] OmdbApi::search() is the parse boundary: rows
+        // arrive typed (imdb_id is a guaranteed non-empty string, title a
+        // string). Map directly — the old per-row is_array/is_string
+        // re-validation double-parsed what the API layer already proved.
         $items = [];
         foreach ($results as $result) {
-            if (is_array($result) === false) {
-                continue;
-            }
-            $imdbId = (is_string($result['imdb_id'] ?? null) ? $result['imdb_id'] : '');
-            if ($imdbId === '') {
-                continue;
-            }
-
-            $title = (is_string($result['title'] ?? null) ? $result['title'] : '');
-
             /** @var array{id: non-empty-string, title: string} $entry */
             $entry = [
-                'id' => $imdbId,
-                'title' => $title,
+                'id' => $result['imdb_id'],
+                'title' => $result['title'],
             ];
 
             $items[] = $entry;

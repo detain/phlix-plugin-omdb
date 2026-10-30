@@ -169,7 +169,7 @@ final class OmdbApi
      *
      * @param string $title Title to search for
      * @param int|null $year Optional release year
-     * @return list<array{imdb_id: string, title: string, year: string, type: string}>
+     * @return list<array{imdb_id: non-empty-string, title: string, year: string, type: string}>
      */
     public function search(string $title, ?int $year = null): array
     {

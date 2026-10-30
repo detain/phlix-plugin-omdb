@@ -967,4 +967,52 @@ final class OmdbPluginTest extends TestCase
         $this->assertIsString($src);
         $this->assertStringNotContainsString('use Phlix\\Plugins\\Metadata\\Omdb\\', $src);
     }
+
+    // -------------------------------------------------------------------------
+    // W-min76-omdb minors: action pinning, parse-don't-revalidate law
+    // -------------------------------------------------------------------------
+
+    /**
+     * [M-OMDB-13 minor] Estate CI hygiene: every `uses:` reference in
+     * .github/workflows must be pinned to a full 40-hex commit SHA — tags
+     * and major floats (@v6, @v1) are rewritten upstream and silently
+     * change what runs on our runners. The sibling phlix-plugin-example
+     * pins in exactly this shape.
+     */
+    public function test_github_workflows_pin_every_action_to_a_full_sha(): void
+    {
+        $files = glob(__DIR__ . '/../../.github/workflows/*.yml');
+        $this->assertIsArray($files);
+        $this->assertNotEmpty($files, 'the workflows directory must exist');
+
+        $checked = 0;
+        foreach ($files as $file) {
+            foreach (file($file) as $lineNo => $line) {
+                if (preg_match('/^\s*-?\s*uses:\s*(\S+)/', $line, $m) !== 1) {
+                    continue;
+                }
+                $checked++;
+                $this->assertMatchesRegularExpression(
+                    '/@[0-9a-f]{40}$/',
+                    $m[1],
+                    sprintf('%s:%d floats an action ref — pin it to a full SHA', basename($file), $lineNo + 1)
+                );
+            }
+        }
+        $this->assertGreaterThan(0, $checked, 'the tripwire must actually observe uses: lines');
+    }
+
+    /**
+     * [M-OMDB-19 minor] OmdbApi::search() is the parse boundary: its return
+     * is typed list<array{imdb_id: non-empty string, title: string, ...}>.
+     * The plugin must map rows directly — re-validating is_array()/
+     * is_string() over already-parsed rows is double validation and must
+     * not creep back. is_array( in the plugin source is the canary.
+     */
+    public function test_plugin_does_not_revalidate_rows_the_api_layer_already_parsed(): void
+    {
+        $src = (string) file_get_contents(__DIR__ . '/../../src/OmdbPlugin.php');
+        $this->assertIsString($src);
+        $this->assertStringNotContainsString('is_array(', $src);
+    }
 }
