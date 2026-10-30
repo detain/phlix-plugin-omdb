@@ -215,7 +215,17 @@ final class OmdbApi
             return null;
         }
 
-        if (($data['Response'] ?? '') === 'False') {
+        // [M-OMDB-07] Only a validated success envelope is a record: the
+        // Response member must literally be 'True' and Title must be a real
+        // non-empty string. Bodies missing Response entirely (or carrying
+        // junk) are rejected to null instead of leaking to the host resolver
+        // as metadata; the old gate only rejected the 'False' string.
+        if (($data['Response'] ?? '') !== 'True') {
+            return null;
+        }
+
+        $title = $data['Title'] ?? null;
+        if (is_string($title) === false || $title === '') {
             return null;
         }
 

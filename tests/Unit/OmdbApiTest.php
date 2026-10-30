@@ -312,6 +312,47 @@ final class OmdbApiTest extends TestCase
         $this->assertNull($result);
     }
 
+    /**
+     * Consequence [M-OMDB-07]: a body WITHOUT the Response member is not a
+     * validated success envelope. The old gate only rejected the literal
+     * 'False' string and returned everything else raw — proxy error JSON and
+     * other shape-junk flowed to the host resolver as if it were a record.
+     */
+    public function test_get_by_imdb_id_returns_null_when_response_member_missing(): void
+    {
+        $api = new OmdbApi('key', true, 0, null, static fn(string $url): ?array => ['Title' => 'Inception', 'Year' => '2010']);
+
+        $this->assertNull($api->getByImdbId('tt1375666'));
+    }
+
+    public function test_get_by_imdb_id_returns_null_when_response_member_is_junk(): void
+    {
+        $api = new OmdbApi('key', true, 0, null, static fn(string $url): ?array => ['Response' => 'OK', 'Title' => 'Inception']);
+
+        $this->assertNull($api->getByImdbId('tt1375666'));
+    }
+
+    public function test_get_by_imdb_id_returns_null_when_title_missing(): void
+    {
+        $api = new OmdbApi('key', true, 0, null, static fn(string $url): ?array => ['Response' => 'True', 'Year' => '2010']);
+
+        $this->assertNull($api->getByImdbId('tt1375666'));
+    }
+
+    public function test_get_by_imdb_id_returns_null_when_title_is_empty(): void
+    {
+        $api = new OmdbApi('key', true, 0, null, static fn(string $url): ?array => ['Response' => 'True', 'Title' => '']);
+
+        $this->assertNull($api->getByImdbId('tt1375666'));
+    }
+
+    public function test_get_by_imdb_id_returns_null_when_title_is_not_a_string(): void
+    {
+        $api = new OmdbApi('key', true, 0, null, static fn(string $url): ?array => ['Response' => 'True', 'Title' => ['Inception']]);
+
+        $this->assertNull($api->getByImdbId('tt1375666'));
+    }
+
     public function test_get_by_imdb_id_returns_full_details(): void
     {
         $data = [

@@ -293,26 +293,47 @@ final class OmdbPlugin implements ConfigurableInterface, LifecycleInterface, Met
         }
 
         // Build the return array with standard metadata fields (pure read).
+        // Every OMDb text field goes through textField(): the API encodes
+        // "no value" as the literal string 'N/A', and a proxied/foreign body
+        // can carry any JSON shape — both collapse to ''.
         return [
             'source'    => self::SOURCE_NAME,
             'imdb_id'   => $externalId,
-            'title'     => $details['Title'] ?? '',
-            'year'      => $details['Year'] ?? '',
-            'rated'     => $details['Rated'] ?? '',
-            'released'  => $details['Released'] ?? '',
-            'runtime'   => $details['Runtime'] ?? '',
-            'genre'     => $details['Genre'] ?? '',
-            'director'  => $details['Director'] ?? '',
-            'writer'    => $details['Writer'] ?? '',
-            'actors'    => $details['Actors'] ?? '',
-            'plot'      => $details['Plot'] ?? '',
-            'language'  => $details['Language'] ?? '',
-            'country'   => $details['Country'] ?? '',
-            'awards'    => $details['Awards'] ?? '',
-            'poster_url' => $details['Poster'] ?? '',
-            'type'      => $details['Type'] ?? '',
+            'title'     => self::textField($details, 'Title'),
+            'year'      => self::textField($details, 'Year'),
+            'rated'     => self::textField($details, 'Rated'),
+            'released'  => self::textField($details, 'Released'),
+            'runtime'   => self::textField($details, 'Runtime'),
+            'genre'     => self::textField($details, 'Genre'),
+            'director'  => self::textField($details, 'Director'),
+            'writer'    => self::textField($details, 'Writer'),
+            'actors'    => self::textField($details, 'Actors'),
+            'plot'      => self::textField($details, 'Plot'),
+            'language'  => self::textField($details, 'Language'),
+            'country'   => self::textField($details, 'Country'),
+            'awards'    => self::textField($details, 'Awards'),
+            'poster_url' => self::textField($details, 'Poster'),
+            'type'      => self::textField($details, 'Type'),
             'ratings'   => $ratingList,
         ];
+    }
+
+    /**
+     * Sanitize one OMDb text field for emission.
+     *
+     * OMDb signals "no value" with the literal string 'N/A'; shape-junk
+     * (array/int/bool/null from a proxied or hostile body) is equally
+     * unusable. Only genuine, non-sentinel strings pass; everything else
+     * maps to '' so the host resolver never persists 'N/A' as data.
+     * The getImages() Poster gate uses the same sentinel idiom.
+     *
+     * @param array<string, mixed> $details
+     */
+    private static function textField(array $details, string $key): string
+    {
+        $value = $details[$key] ?? '';
+
+        return (is_string($value) && $value !== 'N/A') ? $value : '';
     }
 
     /**

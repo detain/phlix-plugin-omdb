@@ -805,4 +805,73 @@ final class OmdbPluginTest extends TestCase
 
         $this->assertSame([], $result);
     }
+
+    // -------------------------------------------------------------------------
+    // Field hygiene [M-OMDB-05/M-OMDB-09]: OMDb's 'N/A' sentinel and foreign
+    // JSON shapes must never be emitted as metadata values.
+    // -------------------------------------------------------------------------
+
+    /**
+     * Consequence: every mapped text field carrying OMDb's literal 'N/A'
+     * ("no value") sentinel maps to '' — the host resolver must never
+     * persist the string 'N/A' as a genre, director, awards line, etc.
+     */
+    public function test_getDetails_maps_na_sentinels_to_empty_strings(): void
+    {
+        $sentinelFields = [
+            'Title', 'Year', 'Rated', 'Released', 'Runtime', 'Genre', 'Director',
+            'Writer', 'Actors', 'Plot', 'Language', 'Country', 'Awards', 'Poster', 'Type',
+        ];
+        $details = ['Response' => 'True', 'imdbRating' => 'N/A', 'Ratings' => []];
+        foreach ($sentinelFields as $field) {
+            $details[$field] = 'N/A';
+        }
+
+        $result = $this->makeConfiguredPluginWithDetails($details)->getDetails('tt1375666');
+
+        $outKeys = [
+            'title', 'year', 'rated', 'released', 'runtime', 'genre', 'director',
+            'writer', 'actors', 'plot', 'language', 'country', 'awards', 'poster_url', 'type',
+        ];
+        $this->assertSame(array_fill_keys($outKeys, ''), array_intersect_key($result, array_fill_keys($outKeys, true)));
+    }
+
+    /**
+     * Consequence: a field whose JSON shape is not a string (array/int/bool/
+     * null — hostile or proxied payload shapes) maps to ''; genuine strings
+     * pass through byte-identical.
+     */
+    public function test_getDetails_maps_non_string_field_shapes_to_empty_strings(): void
+    {
+        $details = [
+            'Response' => 'True',
+            'Title' => 'Inception',
+            'Year' => 2010,
+            'Rated' => true,
+            'Released' => null,
+            'Runtime' => ['148 min'],
+            'Genre' => 42,
+            'Director' => ['Christopher Nolan'],
+            'Writer' => 1.5,
+            'Actors' => false,
+            'Plot' => ['p'],
+            'Language' => [],
+            'Country' => [],
+            'Awards' => 'Won 4 Oscars.',
+            'Poster' => ['https://example.com/poster.jpg'],
+            'Type' => 'series',
+            'imdbRating' => 'N/A',
+            'Ratings' => [],
+        ];
+
+        $result = $this->makeConfiguredPluginWithDetails($details)->getDetails('tt1375666');
+
+        $this->assertSame('Inception', $result['title']);
+        foreach (['year', 'rated', 'released', 'runtime', 'genre', 'director', 'writer', 'actors', 'plot', 'language', 'country'] as $key) {
+            $this->assertSame('', $result[$key], "non-string OMDb field must map to empty string ($key)");
+        }
+        $this->assertSame('Won 4 Oscars.', $result['awards']);
+        $this->assertSame('', $result['poster_url']);
+        $this->assertSame('series', $result['type']);
+    }
 }
