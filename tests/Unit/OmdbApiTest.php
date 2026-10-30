@@ -1351,17 +1351,99 @@ final class OmdbApiTest extends TestCase
     }
 
     /**
+     * [M-OMDB-11 r2] A bad-key envelope is key-state failure wearing a
+     * URL-shaped payload: cached at the success TTL it replays the 401 lie
+     * for a full day and shadows the repaired key (review omdb__secaudit
+     * M11 overturn: 91b69be's choke covered only the two over-limit
+     * markers, leaving the claim's second named harm — the bad key —
+     * sitting in the replay cache). Never-cached, same idiom as the
+     * over-limit pin above.
+     */
+    public function test_bad_key_envelope_is_never_cached(): void
+    {
+        $api = new OmdbApi('key', true, 3600, null, static fn (string $url): ?array => [
+            'Response' => 'False',
+            'Error' => 'Invalid API key.',
+        ]);
+
+        $this->assertNull($api->getByImdbId('tt1375666'));
+
+        $cache = new \ReflectionProperty(OmdbApi::class, 'cache');
+        $cache->setAccessible(true);
+
+        $this->assertSame([], $cache->getValue($api));
+    }
+
+    /**
+     * [M-OMDB-11 r2] The harm made visible end to end: plant a bad key,
+     * fetch, then fetch again after the key works — the second lookup must
+     * reach upstream fresh, not replay the cached error for the rest of
+     * the TTL. Red on the old law (call 2 hit the day-TTL bad-key entry).
+     */
+    public function test_repaired_key_is_not_shadowed_by_a_cached_error_envelope(): void
+    {
+        $calls = 0;
+        $api = new OmdbApi('key', true, 3600, null, static function (string $url) use (&$calls): ?array {
+            $calls++;
+            if ($calls === 1) {
+                return ['Response' => 'False', 'Error' => 'Invalid API key.'];
+            }
+
+            return ['Response' => 'True', 'Title' => 'Inception'];
+        });
+        $this->neutralizeRateLimitSleep($api);
+
+        $this->assertNull($api->getByImdbId('tt1375666'));
+
+        $recovered = $api->getByImdbId('tt1375666');
+
+        $this->assertNotNull($recovered, 'A repaired key must not be shadowed by a cached error envelope');
+        $this->assertSame('Inception', $recovered['Title']);
+        $this->assertSame(2, $calls);
+    }
+
+    /**
+     * [M-OMDB-11 r2] The taxonomy lands on the safe side for every False
+     * shape outside the two named families: an Error-less envelope, a
+     * non-string Error, and request-state failures are key/request truth,
+     * not URL truth — none may enter the replay cache.
+     */
+    public function test_unknown_negative_envelope_shapes_are_never_cached(): void
+    {
+        $envelopes = [
+            ['Response' => 'False'],
+            ['Response' => 'False', 'Error' => null],
+            ['Response' => 'False', 'Error' => "Request was missing the 'ID' argument."],
+        ];
+
+        foreach ($envelopes as $envelope) {
+            $api = new OmdbApi('key', true, 3600, null, static fn (string $url): ?array => $envelope);
+
+            $this->assertNull($api->getByImdbId('tt1375666'));
+
+            $cache = new \ReflectionProperty(OmdbApi::class, 'cache');
+            $cache->setAccessible(true);
+
+            $this->assertSame([], $cache->getValue($api), 'Envelope ' . json_encode($envelope) . ' must not be cached');
+        }
+    }
+
+    /**
      * Complement pin: a plain not-found keeps its old silent behavior — no
-     * warning, no cooldown — and (as before this fix) IS cached, amortizing
-     * quota for repeated lookups of the same missing title.
+     * warning, no cooldown — and remains the ONLY cached negative: its
+     * truth belongs to the queried URL, not to the key or the day, so
+     * caching it amortizes quota for repeated lookups of the same missing
+     * title (deliberate design, review omdb__secaudit M11 r1).
      */
     public function test_not_found_envelope_stays_silent_and_does_not_arm_cooldown(): void
     {
         $logger = new OmdbCapturingLogger();
-        $api = new OmdbApi('key', true, 3600, $logger, static fn (string $url): ?array => [
-            'Response' => 'False',
-            'Error' => 'Title not found.',
-        ]);
+        $calls = 0;
+        $api = new OmdbApi('key', true, 3600, $logger, static function (string $url) use (&$calls): ?array {
+            $calls++;
+
+            return ['Response' => 'False', 'Error' => 'Title not found.'];
+        });
 
         $this->assertNull($api->getByImdbId('tt0000000'));
         $this->assertFalse($api->isOverLimitCoolingDown());
@@ -1370,6 +1452,9 @@ final class OmdbApiTest extends TestCase
         $cache = new \ReflectionProperty(OmdbApi::class, 'cache');
         $cache->setAccessible(true);
         $this->assertNotEmpty($cache->getValue($api));
+
+        $this->assertNull($api->getByImdbId('tt0000000'));
+        $this->assertSame(1, $calls, 'The not-found exception must still be served from cache');
     }
 
     /**

@@ -69,6 +69,17 @@ final class OmdbApi
      */
     private const OVER_LIMIT_ERROR_MARKERS = ['daily limit', 'rate limit'];
 
+    /**
+     * Lower-cased substrings of the envelope Error field that mean "this
+     * URL's title simply is not in the database" (OMDb has shipped the
+     * 'Movie not found!' / 'Series not found.' / 'Episode not found.'
+     * family). The only negative whose truth belongs to the queried URL
+     * rather than the key or the day, so it may be replayed from cache.
+     *
+     * @var list<string>
+     */
+    private const NOT_FOUND_ERROR_MARKERS = ['not found'];
+
     /** Seconds in a UTC day; OMDb daily limits roll over at UTC midnight. */
     private const UTC_DAY_SECONDS = 86400;
 
@@ -331,9 +342,11 @@ final class OmdbApi
      *
      * Applies the daily-limit cooldown gate, rate limiting, in-memory cache,
      * and optional SSL verification. Over-limit envelopes are surfaced as a
-     * distinguishable warning + null (never a stale cached not-found); plain
-     * negative envelopes flow through to the callers unchanged (and are
-     * cached, which amortizes quota).
+     * distinguishable warning + null (never a stale cached not-found); other
+     * negative envelopes flow through to the callers unchanged, and only the
+     * per-title not-found family is cached ([M-OMDB-11 r2]: key-state and
+     * request-state failures bypass the replay cache — see
+     * {@see isCacheableEnvelope()}).
      *
      * @param string $url Absolute OMDb API URL
      * @return array<string, mixed>|null Decoded JSON or null on failure
@@ -441,7 +454,9 @@ final class OmdbApi
      * "not found" lie is the failure mode this prevents) and never returned
      * verbatim; it arms the cooldown and presents as null, matching the
      * client's existing silent-null failure taxonomy while the warning log
-     * keeps it distinguishable from a real not-found.
+     * keeps it distinguishable from a real not-found. What may reach the
+     * cache at all is the envelope-eligibility law in
+     * {@see isCacheableEnvelope()}.
      *
      * @param array<string, mixed>|null $response Decoded JSON body or null
      * @param string $url Request URL, for the log surface
@@ -460,12 +475,54 @@ final class OmdbApi
             return null;
         }
 
-        if ($this->cacheTtlSeconds > 0) {
+        if ($this->cacheTtlSeconds > 0 && self::isCacheableEnvelope($response)) {
             $response['_cached_at'] = $this->clock();
             $this->cache[$cacheKey] = $response;
         }
 
         return $response;
+    }
+
+    /**
+     * Whether a decoded envelope may enter the replay cache.
+     *
+     * Only URL-stable truth survives a replay. Success payloads keep the
+     * long-TTL design; among negatives (over-limit ones never reach here)
+     * only the per-title "not found" family is cacheable — its answer
+     * describes the queried title, so replay amortizes quota (deliberate
+     * design, pinned by
+     * test_not_found_envelope_stays_silent_and_does_not_arm_cooldown).
+     *
+     * [M-OMDB-11 r2] Every other `Response:'False'` shape is key-state or
+     * request-state failure wearing a URL-shaped payload: an 'Invalid API
+     * key.' envelope admitted at the success TTL replays the 401 lie for a
+     * full day and silently shadows the repaired key. The taxonomy is
+     * cache-allowlisted, so unknown and future error strings land on the
+     * safe side (never cached) instead of inheriting a day of immunity.
+     *
+     * @param array<string, mixed> $data Decoded JSON envelope
+     */
+    private static function isCacheableEnvelope(array $data): bool
+    {
+        if (($data['Response'] ?? '') !== 'False') {
+            return true;
+        }
+
+        $error = $data['Error'] ?? null;
+
+        if (is_string($error) === false) {
+            return false;
+        }
+
+        $needle = strtolower($error);
+
+        foreach (self::NOT_FOUND_ERROR_MARKERS as $marker) {
+            if (str_contains($needle, $marker) === true) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
