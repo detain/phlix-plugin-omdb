@@ -28,7 +28,7 @@ The plugin is unsigned by design — install via the Phlix admin UI:
 3. Paste this URL into the **Install from URL** form and submit:
 
    ```
-   https://raw.githubusercontent.com/detain/phlix-plugin-omdb/main/plugin.json
+   https://raw.githubusercontent.com/detain/phlix-plugin-omdb/master/plugin.json
    ```
 
 4. The server downloads the manifest, validates it, runs `composer install --no-dev`,
