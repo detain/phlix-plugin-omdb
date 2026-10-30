@@ -36,15 +36,17 @@ use Psr\Log\NullLogger;
  *   (Metascore has no valid ENUM member and is dropped)
  * - Non-blocking async HTTP via Workerman/http-client (HTTPS only)
  * - Configurable rate limiting, response caching, and daily-limit cooldown
- * - TLS verification toggle for self-hosted proxies
+ * - TLS verification toggle (advanced escape hatch — see use_ssl_verification
+ *   below: off means the query-string API key is capturable in transit)
  * - onEnable is a cheap wire-only step: no network, no DB, never throws
  *
  * ## Configuration (plugin.json settings)
  *
  * - enabled: Enable the OMDb provider (boolean, default false)
  * - api_key: OMDb API key (string, secret) — get at http://www.omdbapi.com/apikey.aspx
- * - use_ssl_verification: Verify TLS certificates (boolean, default true)
- * - cache_ttl_seconds: Cache TTL in seconds (integer, default 86400)
+ * - use_ssl_verification: Verify TLS certificates (boolean, default true) —
+ *   turning it off sends the key in cleartext-query to any intercepting hop
+ * - cache_ttl_seconds: Cache TTL in seconds (integer, default 86400; 0 disables caching)
  *
  * @package Phlix\Plugins\Metadata\Omdb
  * @since 0.1.0
@@ -92,9 +94,11 @@ final class OmdbPlugin implements ConfigurableInterface, LifecycleInterface, Met
      * - NO database connection, NO migrations.
      * - NEVER throws on a missing API key.
      *
-     * It only resolves a logger and constructs the (network-free) transport
-     * object. The actual "connect" is deferred to {@see ensureApi()}, which
-     * runs lazily on the first search/getDetails/getImages call.
+     * It only resolves a logger and runs the (network-free) transport wire-up
+     * {@see ensureApi()} when a key is already present. ensureApi() is not a
+     * connect step: constructing OmdbApi performs no I/O, and the first
+     * request happens only when a method on the client is invoked. Reads run
+     * through the same idempotent ensureApi() call.
      *
      * @param ContainerInterface $container Host PSR-11 container
      * @return void
@@ -116,11 +120,11 @@ final class OmdbPlugin implements ConfigurableInterface, LifecycleInterface, Met
     }
 
     /**
-     * Deferred "connect" step: lazily construct the OMDb transport.
-     *
-     * Called on the first read (search/getDetails/getImages), never at boot.
-     * Constructing {@see OmdbApi} performs NO network I/O; the first request
-     * only happens when a method on the returned client is invoked.
+     * Idempotent transport wire-up: returns the existing client unchanged.
+     * Called from {@see onEnable()} (when a key is already configured) and
+     * again before every read (search/getDetails/getImages). Constructing
+     * {@see OmdbApi} performs NO network I/O; the first request only happens
+     * when a method on the returned client is invoked.
      *
      * @return OmdbApi|null The client, or null when no API key is configured
      */

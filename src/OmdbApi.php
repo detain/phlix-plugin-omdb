@@ -91,7 +91,9 @@ final class OmdbApi
     private array $cache = [];
 
     /**
-     * Unix timestamp (with microseconds) of the last API request, for rate limiting.
+     * Monotonic seconds reading ({@see clock()} — hrtime based, not a Unix
+     * wall-clock timestamp) at the last API request dispatch, for rate
+     * limiting. Only ever compared against clock() values.
      */
     private float $lastRequestTimestamp = 0.0;
 
@@ -122,7 +124,7 @@ final class OmdbApi
      * @var (\Closure(string): (array<string, mixed>|null))|null
      * @internal Tests only.
      */
-    private $jsonFetcher = null;
+    private ?\Closure $jsonFetcher = null;
 
     /**
      * @param string $apiKey OMDb API key
@@ -349,7 +351,10 @@ final class OmdbApi
      * {@see isCacheableEnvelope()}).
      *
      * @param string $url Absolute OMDb API URL
-     * @return array<string, mixed>|null Decoded JSON or null on failure
+     * @return array<string, mixed>|null Decoded JSON or null on failure. When
+     *         the cache is enabled, a cacheable MISS-path response carries the
+     *         internal '_cached_at' stamp in the returned array itself; the
+     *         hit path strips it before returning (the two paths differ).
      */
     private function httpGetJson(string $url): ?array
     {

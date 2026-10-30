@@ -22,7 +22,7 @@ final readonly class OmdbSettings
      * @param bool         $enabled             Whether the plugin is enabled
      * @param string|null  $apiKey              OMDb API key (null when not configured)
      * @param bool         $useSslVerification  Whether to verify TLS certificates
-     * @param int          $cacheTtlSeconds     Cache TTL in seconds
+     * @param int          $cacheTtlSeconds     Response cache TTL in seconds (0 disables caching)
      */
     public function __construct(
         public bool $enabled = false,

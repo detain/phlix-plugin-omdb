@@ -19,9 +19,13 @@ use Psr\Container\ContainerInterface;
  * Dev-only stub of the host server's lifecycle contract.
  *
  * Loaded by `tests/bootstrap.php` when the plugin is tested outside a
- * Phlix server checkout. Keep this file byte-compatible with the
+ * Phlix server checkout. This stub is SIGNATURE-compatible with the
  * canonical definition in `detain/phlix-shared` at
- * `src/Plugin/LifecycleInterface.php`.
+ * `src/Plugin/LifecycleInterface.php` — same three methods, parameters
+ * and return types — but NOT byte-identical: the canonical's extensive
+ * docblocks are trimmed away here and this file adds local formatting.
+ * Keep the METHOD SIGNATURES in lockstep with the canonical; nothing
+ * behavioral may drift.
  *
  * @internal Tests only — never autoloaded into production.
  */
@@ -43,4 +47,3 @@ interface LifecycleInterface
      */
     public function subscribedEvents(): array;
 }
-// end interface

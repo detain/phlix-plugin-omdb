@@ -17,7 +17,7 @@ owns writing ratings and Phlix's rating aggregation.
 - **Non-blocking HTTP** — async HTTPS-only client compatible with Workerman's event loop
 - **Rate limiting** — fixed minimum spacing between calls (0.25s), plus an automatic cooldown to the next UTC midnight when OMDb reports a daily-limit envelope; the interval is not a setting
 - **Response caching** — configurable in-memory cache TTL to reduce API calls
-- **TLS verification toggle** — option to disable SSL verification for self-hosted proxies
+- **TLS verification toggle** — advanced escape hatch that disables certificate checking. OMDb authenticates with your key in the URL **query string**, so unverified TLS lets an intercepting hop harvest the API key. Keep it on; use off only when debugging behind a proxy you control
 - **Pure read** — `getDetails()` fetches and shapes data only; `onEnable()` does no network or DB I/O and never throws on a missing key
 
 ## Install
@@ -43,8 +43,8 @@ The plugin is unsigned by design — install via the Phlix admin UI:
 |---------|------|----------|--------|------|---------|-------------|
 | `enabled` | boolean | No | No | `standard` | `false` | Master on/off for OMDb rating enrichment. Optional; default off. |
 | `api_key` | string | **Yes** | Yes | `standard` | `null` | Your OMDb API key. The free tier allows 1,000 requests/day. |
-| `use_ssl_verification` | boolean | No | No | `advanced` | `true` | Verify OMDb's TLS certificate. Optional; default on. Leave on unless debugging. |
-| `cache_ttl_seconds` | integer | No | No | `advanced` | `86400` | How long to cache OMDb responses. Optional; default 86400 (24 hours). |
+| `use_ssl_verification` | boolean | No | No | `advanced` | `true` | Verify OMDb's TLS certificate. **Keep on** — off exposes the query-string API key to interception/theft; debugging behind a trusted proxy only. |
+| `cache_ttl_seconds` | integer | No | No | `advanced` | `86400` | How long to cache OMDb responses; `0` disables the cache. Optional; default 86400 (24 hours). |
 
 ### Where to get your OMDb API key
 
