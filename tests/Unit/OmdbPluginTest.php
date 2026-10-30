@@ -867,7 +867,11 @@ final class OmdbPluginTest extends TestCase
         $result = $this->makeConfiguredPluginWithDetails($details)->getDetails('tt1375666');
 
         $this->assertSame('Inception', $result['title']);
-        foreach (['year', 'rated', 'released', 'runtime', 'genre', 'director', 'writer', 'actors', 'plot', 'language', 'country'] as $key) {
+        $junkKeys = [
+            'year', 'rated', 'released', 'runtime', 'genre', 'director', 'writer',
+            'actors', 'plot', 'language', 'country',
+        ];
+        foreach ($junkKeys as $key) {
             $this->assertSame('', $result[$key], "non-string OMDb field must map to empty string ($key)");
         }
         $this->assertSame('Won 4 Oscars.', $result['awards']);

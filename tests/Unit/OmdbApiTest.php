@@ -320,35 +320,40 @@ final class OmdbApiTest extends TestCase
      */
     public function test_get_by_imdb_id_returns_null_when_response_member_missing(): void
     {
-        $api = new OmdbApi('key', true, 0, null, static fn(string $url): ?array => ['Title' => 'Inception', 'Year' => '2010']);
+        $body = ['Title' => 'Inception', 'Year' => '2010'];
+        $api = new OmdbApi('key', true, 0, null, static fn(string $url): ?array => $body);
 
         $this->assertNull($api->getByImdbId('tt1375666'));
     }
 
     public function test_get_by_imdb_id_returns_null_when_response_member_is_junk(): void
     {
-        $api = new OmdbApi('key', true, 0, null, static fn(string $url): ?array => ['Response' => 'OK', 'Title' => 'Inception']);
+        $body = ['Response' => 'OK', 'Title' => 'Inception'];
+        $api = new OmdbApi('key', true, 0, null, static fn(string $url): ?array => $body);
 
         $this->assertNull($api->getByImdbId('tt1375666'));
     }
 
     public function test_get_by_imdb_id_returns_null_when_title_missing(): void
     {
-        $api = new OmdbApi('key', true, 0, null, static fn(string $url): ?array => ['Response' => 'True', 'Year' => '2010']);
+        $body = ['Response' => 'True', 'Year' => '2010'];
+        $api = new OmdbApi('key', true, 0, null, static fn(string $url): ?array => $body);
 
         $this->assertNull($api->getByImdbId('tt1375666'));
     }
 
     public function test_get_by_imdb_id_returns_null_when_title_is_empty(): void
     {
-        $api = new OmdbApi('key', true, 0, null, static fn(string $url): ?array => ['Response' => 'True', 'Title' => '']);
+        $body = ['Response' => 'True', 'Title' => ''];
+        $api = new OmdbApi('key', true, 0, null, static fn(string $url): ?array => $body);
 
         $this->assertNull($api->getByImdbId('tt1375666'));
     }
 
     public function test_get_by_imdb_id_returns_null_when_title_is_not_a_string(): void
     {
-        $api = new OmdbApi('key', true, 0, null, static fn(string $url): ?array => ['Response' => 'True', 'Title' => ['Inception']]);
+        $body = ['Response' => 'True', 'Title' => ['Inception']];
+        $api = new OmdbApi('key', true, 0, null, static fn(string $url): ?array => $body);
 
         $this->assertNull($api->getByImdbId('tt1375666'));
     }
@@ -960,6 +965,72 @@ final class OmdbApiTest extends TestCase
         // Second call - cache should be expired, jsonFetcher called again
         $api->getByImdbId('tt1375666');
         $this->assertSame(2, $callCount, 'Expired cache should trigger new request');
+    }
+
+    /**
+     * [M-OMDB-12] A 200 whose body is not JSON (Cloudflare challenge HTML on
+     * a transparent proxy) must route to the redacted error sink — the
+     * JSON_THROW_ON_ERROR decode previously let JsonException escape into
+     * whatever client internals invoked the plugin.
+     */
+    public function test_non_json_success_body_routes_to_error_sink_instead_of_throwing(): void
+    {
+        $logger = new OmdbCapturingLogger();
+        $api = new OmdbApi(self::CANARY_KEY, true, 0, $logger);
+        $challenge = '<html><head>Attention Required! | Cloudflare</head></html>';
+        $this->injectClient($api, OmdbFakeHttpClient::withBody($challenge));
+
+        $result = $api->getByImdbId('tt1375666');
+
+        $this->assertNull($result);
+        $this->assertCount(1, $logger->records);
+        [$message, $context] = $logger->records[0];
+        $this->assertSame('OMDb HTTP error', $message);
+        $this->assertStringNotContainsString(self::CANARY_KEY, serialize($context));
+    }
+
+    /**
+     * [M-OMDB-12] Well-formed JSON that is not an object (scalar document)
+     * must also route to the error sink instead of TypeError-ing through
+     * the admitResponse ?array parameter.
+     */
+    public function test_scalar_json_success_body_routes_to_error_sink(): void
+    {
+        $logger = new OmdbCapturingLogger();
+        $api = new OmdbApi(self::CANARY_KEY, true, 0, $logger);
+        $this->injectClient($api, OmdbFakeHttpClient::withBody('42'));
+
+        $this->assertNull($api->getByImdbId('tt1375666'));
+        $this->assertSame('OMDb HTTP error', $logger->records[0][0]);
+    }
+
+    /**
+     * Coverage gap (review omdb__srphp): the SUCCESS arm of the real-HTTP
+     * transport had never been exercised — a valid JSON envelope must decode,
+     * admit, and reach the caller. (Green before and after the cure; it pins
+     * the arm the M-12 tests contrast against.)
+     */
+    public function test_valid_json_success_body_admits_the_record(): void
+    {
+        $body = json_encode(['Response' => 'True', 'Title' => 'Inception', 'Year' => '2010']);
+        $this->assertIsString($body);
+        $api = new OmdbApi('key', true, 0);
+        $this->injectClient($api, OmdbFakeHttpClient::withBody($body));
+
+        $result = $api->getByImdbId('tt1375666');
+
+        $this->assertIsArray($result);
+        $this->assertSame('Inception', $result['Title']);
+    }
+
+    /**
+     * Drive the real-HTTP transport with a preconfigured fake client.
+     */
+    private function injectClient(OmdbApi $api, OmdbFakeHttpClient $client): void
+    {
+        $property = new \ReflectionProperty(OmdbApi::class, 'httpClient');
+        $property->setAccessible(true);
+        $property->setValue($api, $client);
     }
 
     /**

@@ -372,8 +372,30 @@ final class OmdbApi
                 $body = $response->getBody();
                 $contents = $body->getContents();
                 if ($contents !== '') {
-                    /** @var array<string, mixed>|null $decoded */
-                    $decoded = json_decode($contents, true, 16, JSON_THROW_ON_ERROR);
+                    try {
+                        /** @var mixed $decoded */
+                        $decoded = json_decode($contents, true, 16, JSON_THROW_ON_ERROR);
+                    } catch (\JsonException $e) {
+                        // [M-OMDB-12] A 200 with a non-JSON body (e.g. a
+                        // Cloudflare challenge page from a transparent proxy)
+                        // must never escape into client internals — route it
+                        // through the error sink (message carries no URL).
+                        $state['error'] = $e;
+                        $state['done'] = true;
+
+                        return;
+                    }
+
+                    if (is_array($decoded) === false) {
+                        // Scalar JSON documents decode fine but are not an
+                        // envelope; same sink. Body text is not echoed.
+                        $state['error'] = new \RuntimeException('OMDb response body is not a JSON object');
+                        $state['done'] = true;
+
+                        return;
+                    }
+
+                    /** @var array<string, mixed> $decoded */
                     $state['response'] = $decoded;
                 }
                 $state['done'] = true;
