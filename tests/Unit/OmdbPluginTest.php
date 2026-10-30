@@ -878,4 +878,93 @@ final class OmdbPluginTest extends TestCase
         $this->assertSame('', $result['poster_url']);
         $this->assertSame('series', $result['type']);
     }
+
+    // -------------------------------------------------------------------------
+    // W-min75-omdb minors: configure() transport law, poster scheme gate
+    // -------------------------------------------------------------------------
+
+    /**
+     * [M-OMDB-06 minor] A rotated api_key must reach the wire: configure()
+     * discards the self-built transport so the next read rebuilds it from
+     * the fresh settings (previously ensureApi() kept serving the client
+     * built with the old key forever).
+     */
+    public function test_configure_rebuilds_the_self_built_transport_for_a_rotated_key(): void
+    {
+        $plugin = new OmdbPlugin(new OmdbSettings(enabled: true, apiKey: 'first_key'));
+        $ensure = new \ReflectionMethod(OmdbPlugin::class, 'ensureApi');
+        $ensure->setAccessible(true);
+        $apiKey = new \ReflectionProperty(OmdbApi::class, 'apiKey');
+        $apiKey->setAccessible(true);
+
+        $first = $ensure->invoke($plugin);
+        $this->assertInstanceOf(OmdbApi::class, $first);
+
+        $plugin->configure(['enabled' => true, 'api_key' => 'second_key']);
+
+        $second = $ensure->invoke($plugin);
+        $this->assertInstanceOf(OmdbApi::class, $second);
+        $this->assertNotSame($first, $second, 'configure() must discard the self-built client');
+        $this->assertSame('first_key', $apiKey->getValue($first));
+        $this->assertSame('second_key', $apiKey->getValue($second));
+    }
+
+    /**
+     * [M-OMDB-06 minor] Counterpart law: a constructor-injected client is
+     * the caller's property — configure() must never null it out (the test
+     * seam and any host-injected transport rely on this).
+     */
+    public function test_configure_keeps_a_constructor_injected_transport(): void
+    {
+        $prebuilt = new OmdbApi('injected_key');
+        $plugin = new OmdbPlugin(new OmdbSettings(enabled: true, apiKey: 'key'), null, $prebuilt);
+
+        $plugin->configure(['enabled' => true, 'api_key' => 'other_key']);
+
+        $ensure = new \ReflectionMethod(OmdbPlugin::class, 'ensureApi');
+        $ensure->setAccessible(true);
+        $this->assertSame($prebuilt, $ensure->invoke($plugin));
+    }
+
+    /**
+     * [M-OMDB-07 minor] Poster values that are not strict-lowercase https
+     * URLs (plaintext http:, other schemes, uppercase scheme variants,
+     * malformed slashes) are dropped: getDetails emits '' and getImages
+     * returns []. A tampered or transparently-proxied body must never ship
+     * a fetchable non-TLS art URL into host persistence.
+     */
+    public function test_poster_values_outside_strict_https_are_dropped(): void
+    {
+        $bad = [
+            'http://example.com/poster.jpg',
+            'HTTP://EXAMPLE.COM/POSTER.JPG',
+            'HTTPS://EXAMPLE.COM/POSTER.JPG',
+            'javascript:alert(1)',
+            'file:///etc/passwd',
+            ' //example.com/poster.jpg',
+            'https:/example.com/poster.jpg',
+        ];
+        foreach ($bad as $poster) {
+            $details = ['Response' => 'True', 'Title' => 'Inception', 'Poster' => $poster];
+
+            $result = $this->makeConfiguredPluginWithDetails($details)->getDetails('tt1375666');
+            $this->assertSame('', $result['poster_url'], 'non-https Poster must map to empty string: ' . $poster);
+
+            $images = $this->makeConfiguredPluginWithPoster($details)->getImages('tt1375666');
+            $this->assertSame([], $images, 'non-https Poster must yield no images: ' . $poster);
+        }
+    }
+
+    /**
+     * [M-OMDB-17 minor] OmdbPlugin lives in namespace
+     * Phlix\Plugins\Metadata\Omdb — `use` lines importing its own
+     * namespace's classes (OmdbApi, OmdbSettings) are redundant noise and
+     * must not return.
+     */
+    public function test_omdb_plugin_carries_no_same_namespace_imports(): void
+    {
+        $src = (string) file_get_contents(__DIR__ . '/../../src/OmdbPlugin.php');
+        $this->assertIsString($src);
+        $this->assertStringNotContainsString('use Phlix\\Plugins\\Metadata\\Omdb\\', $src);
+    }
 }

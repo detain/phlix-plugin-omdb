@@ -11,8 +11,6 @@ declare(strict_types=1);
 
 namespace Phlix\Plugins\Metadata\Omdb;
 
-use Phlix\Plugins\Metadata\Omdb\OmdbApi;
-use Phlix\Plugins\Metadata\Omdb\OmdbSettings;
 use Phlix\Shared\Metadata\MetadataSourceInterface;
 use Phlix\Shared\Plugin\ConfigurableInterface;
 use Phlix\Shared\Plugin\LifecycleInterface;
@@ -59,6 +57,14 @@ final class OmdbPlugin implements ConfigurableInterface, LifecycleInterface, Met
     public const SOURCE_NAME = 'omdb';
 
     /**
+     * Whether {@see $api} was constructed by {@see ensureApi()} (true) or
+     * injected by the caller through the constructor (false). configure()
+     * discards only self-built transports — injected clients are the
+     * caller's property.
+     */
+    private bool $apiSelfBuilt = false;
+
+    /**
      * @param OmdbSettings|null $settings             Initial settings (loaded from DB on enable)
      * @param LoggerInterface|null $logger            Optional PSR-3 logger
      * @param OmdbApi|null $api                       Pre-built API client (test seam)
@@ -81,6 +87,16 @@ final class OmdbPlugin implements ConfigurableInterface, LifecycleInterface, Met
     public function configure(array $settings): void
     {
         $this->settings = OmdbSettings::fromArray($settings);
+
+        // [M-OMDB-06 minor] A rotated api_key must reach the wire: drop the
+        // self-built transport so the next read rebuilds it from the fresh
+        // settings (ensureApi() used to keep serving the client built with
+        // the old key). Constructor-injected clients belong to the caller
+        // and survive untouched.
+        if ($this->apiSelfBuilt === true) {
+            $this->api = null;
+            $this->apiSelfBuilt = false;
+        }
     }
 
     /**
@@ -146,6 +162,7 @@ final class OmdbPlugin implements ConfigurableInterface, LifecycleInterface, Met
             cacheTtlSeconds: $settings->cacheTtlSeconds,
             logger: $this->logger ?? new NullLogger(),
         );
+        $this->apiSelfBuilt = true;
 
         return $this->api;
     }
@@ -299,7 +316,8 @@ final class OmdbPlugin implements ConfigurableInterface, LifecycleInterface, Met
         // Build the return array with standard metadata fields (pure read).
         // Every OMDb text field goes through textField(): the API encodes
         // "no value" as the literal string 'N/A', and a proxied/foreign body
-        // can carry any JSON shape — both collapse to ''.
+        // can carry any JSON shape — both collapse to ''. The Poster member
+        // goes through posterUrl(), which additionally requires https.
         return [
             'source'    => self::SOURCE_NAME,
             'imdb_id'   => $externalId,
@@ -316,7 +334,7 @@ final class OmdbPlugin implements ConfigurableInterface, LifecycleInterface, Met
             'language'  => self::textField($details, 'Language'),
             'country'   => self::textField($details, 'Country'),
             'awards'    => self::textField($details, 'Awards'),
-            'poster_url' => self::textField($details, 'Poster'),
+            'poster_url' => self::posterUrl($details),
             'type'      => self::textField($details, 'Type'),
             'ratings'   => $ratingList,
         ];
@@ -338,6 +356,28 @@ final class OmdbPlugin implements ConfigurableInterface, LifecycleInterface, Met
         $value = $details[$key] ?? '';
 
         return (is_string($value) && $value !== 'N/A') ? $value : '';
+    }
+
+    /**
+     * Sanitize a Poster URL for emission.
+     *
+     * Real OMDb serves art only over HTTPS (https://m.media-amazon.com/...),
+     * and the value flows onward to host persistence and eventually a
+     * browser/TV image loader. The textField() sentinel gate plus a strict
+     * lowercase `https://` prefix are required: a proxied or hostile body
+     * can carry 'http://' (key-adjacent traffic downgrade), 'javascript:'
+     * (script URL sinks), 'file:' or any other shape, and those must map to
+     * '' exactly like 'N/A' does. Uppercase scheme variants are rejected
+     * too — canonical OMDb values are lowercase, and fail-closed keeps a
+     * casing trick out of the emitter.
+     *
+     * @param array<string, mixed> $details
+     */
+    private static function posterUrl(array $details): string
+    {
+        $value = self::textField($details, 'Poster');
+
+        return (preg_match('/^https:\/\/\S+$/', $value) === 1) ? $value : '';
     }
 
     /**
@@ -364,8 +404,10 @@ final class OmdbPlugin implements ConfigurableInterface, LifecycleInterface, Met
             return [];
         }
 
-        $poster = $details['Poster'] ?? '';
-        if (is_string($poster) === false || $poster === '' || $poster === 'N/A') {
+        // [M-OMDB-07 minor] Same gate as getDetails(): only a strict https
+        // Poster yields an image; sentinel/junk/scheme-shapeshifters -> [].
+        $poster = self::posterUrl($details);
+        if ($poster === '') {
             return [];
         }
 

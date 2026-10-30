@@ -12,7 +12,6 @@ declare(strict_types=1);
 namespace Phlix\Plugins\Metadata\Omdb;
 
 use Psr\Log\LoggerInterface;
-use Psr\Log\NullLogger;
 use Workerman\Http\Client;
 use Workerman\Http\Response;
 use Workerman\Timer;
@@ -220,11 +219,22 @@ final class OmdbApi
     /**
      * Fetch full details for an IMDb ID.
      *
-     * @param string $imdbId IMDb ID (e.g., "tt0120737")
+     * @param string $imdbId IMDb ID — must match `^tt\d{7,10}$` (e.g.,
+     *                       "tt0120737"); non-conforming strings fail to
+     *                       null without dispatching
      * @return array<string, mixed>|null Details array or null on failure
      */
     public function getByImdbId(string $imdbId): ?array
     {
+        // [M-OMDB-08 minor] Format gate ahead of dispatch: an OMDb id is
+        // 'tt' + 7-10 digits. Junk (a raw title, a short stub, an
+        // over-long random run) can never return a record — it only burns
+        // daily quota on an error envelope. Fail taxonomy: null, matching
+        // every other rejection in this method.
+        if (preg_match('/^tt\d{7,10}$/', $imdbId) !== 1) {
+            return null;
+        }
+
         $params = ['i' => $imdbId, 'apikey' => $this->apiKey, 'plot' => 'full'];
         $url = self::API_BASE . '/?' . http_build_query($params);
 
@@ -351,10 +361,9 @@ final class OmdbApi
      * {@see isCacheableEnvelope()}).
      *
      * @param string $url Absolute OMDb API URL
-     * @return array<string, mixed>|null Decoded JSON or null on failure. When
-     *         the cache is enabled, a cacheable MISS-path response carries the
-     *         internal '_cached_at' stamp in the returned array itself; the
-     *         hit path strips it before returning (the two paths differ).
+     * @return array<string, mixed>|null Decoded JSON or null on failure.
+     *         Cache bookkeeping ('_cached_at') is stamped on the stored copy
+     *         only — miss-path and hit-path returns have identical shape.
      */
     private function httpGetJson(string $url): ?array
     {
@@ -481,8 +490,23 @@ final class OmdbApi
         }
 
         if ($this->cacheTtlSeconds > 0 && self::isCacheableEnvelope($response)) {
-            $response['_cached_at'] = $this->clock();
-            $this->cache[$cacheKey] = $response;
+            // [M-OMDB-09/15/11 minors] Cache-bookkeeping law: the '_cached_at'
+            // stamp lives ONLY on the stored copy — the caller receives the
+            // envelope exactly as decoded, so fresh-miss and replay-hit
+            // returns have identical shape (the miss path used to leak the
+            // stamp). Expired entries are evicted at write time (entries
+            // merely bypassed on read used to leak until process death).
+            $now = $this->clock();
+            $deadline = $now - $this->cacheTtlSeconds;
+            foreach ($this->cache as $key => $entry) {
+                if (($entry['_cached_at'] ?? 0) <= $deadline) {
+                    unset($this->cache[$key]);
+                }
+            }
+
+            $stamped = $response;
+            $stamped['_cached_at'] = $now;
+            $this->cache[$cacheKey] = $stamped;
         }
 
         return $response;

@@ -1552,4 +1552,100 @@ final class OmdbApiTest extends TestCase
         $property->setAccessible(true);
         $property->setValue($api, $client);
     }
+
+    // -------------------------------------------------------------------------
+    // W-min75-omdb minors: format gate, return-shape uniformity, eviction
+    // -------------------------------------------------------------------------
+
+    /**
+     * [M-OMDB-08 minor] Junk ids must never burn quota: the format gate
+     * rejects anything not `tt` + 7-10 digits before dispatch, failing with
+     * the client's null taxonomy. Genuine 7- and 8-digit ids pass through.
+     */
+    public function test_malformed_imdb_ids_are_rejected_before_dispatch(): void
+    {
+        $calls = 0;
+        $data = ['Response' => 'True', 'Title' => 'Inception'];
+        $api = new OmdbApi('key', true, 0, null, static function (string $url) use (&$calls, $data): ?array {
+            $calls++;
+
+            return $data;
+        });
+        $this->neutralizeRateLimitSleep($api);
+
+        $junk = ['', 'Inception', 'tt123456', 'ttabcdefgh', 'ttx1234567', 'x' . str_repeat('9', 40), 'tt12345678901'];
+        foreach ($junk as $id) {
+            $this->assertNull($api->getByImdbId($id), 'junk id must fail to null: ' . $id);
+        }
+        $this->assertSame(0, $calls, 'the format gate must reject before the transport');
+
+        $this->assertNotNull($api->getByImdbId('tt1234567'));
+        $this->assertNotNull($api->getByImdbId('tt1375666'));
+        $this->assertSame(2, $calls, 'valid 7- and 8-digit ids must dispatch');
+    }
+
+    /**
+     * [M-OMDB-09/15 minor] The cache stamp must stay inside the cache: a
+     * fresh miss-path return has the same shape as its replayed hit (no
+     * '_cached_at' visible to callers) while the stored copy keeps it.
+     */
+    public function test_fresh_return_matches_its_cache_replay_and_hides_the_stamp(): void
+    {
+        $data = ['Response' => 'True', 'Title' => 'Inception', 'imdbRating' => '8.8'];
+        $api = new OmdbApi('key', true, 3600, null, static fn(string $url): ?array => $data);
+
+        $fresh = $api->getByImdbId('tt1375666');
+        $replay = $api->getByImdbId('tt1375666');
+
+        $this->assertIsArray($fresh);
+        $this->assertSame($data, $fresh, 'a cacheable response must reach the caller exactly as decoded');
+        $this->assertFalse(array_key_exists('_cached_at', $fresh), 'miss-path returns must not leak the cache stamp');
+        $this->assertSame($fresh, $replay, 'miss path and hit path must return the same shape');
+
+        $cache = new \ReflectionProperty(OmdbApi::class, 'cache');
+        $cache->setAccessible(true);
+        $entries = $cache->getValue($api);
+        $entry = $entries[array_key_first($entries)] ?? null;
+        $this->assertIsArray($entry);
+        $this->assertArrayHasKey('_cached_at', $entry, 'the stored copy must carry the stamp');
+    }
+
+    /**
+     * [M-OMDB-11 minor] An expired entry bypassed on read must be evicted
+     * when the next cacheable response is stored — previously bypassed
+     * entries were never freed for the life of the process.
+     */
+    public function test_expired_entries_are_pruned_when_a_new_response_is_cached(): void
+    {
+        $data = ['Response' => 'True', 'Title' => 'Inception'];
+        $api = new OmdbApi('key', true, 3600, null, static fn(string $url): ?array => $data);
+
+        $clock = new \ReflectionMethod(OmdbApi::class, 'clock');
+        $clock->setAccessible(true);
+        $cache = new \ReflectionProperty(OmdbApi::class, 'cache');
+        $cache->setAccessible(true);
+
+        // Plant an entry whose stamp is older than the TTL window — on the
+        // same monotonic clock the class itself reads, so the expiry is
+        // deterministic regardless of machine uptime.
+        $cache->setValue($api, ['stale-key' => ['Response' => 'True', '_cached_at' => $clock->invoke($api) - 3610.0]]);
+
+        $this->assertNotNull($api->getByImdbId('tt1375666'));
+
+        $entries = $cache->getValue($api);
+        $this->assertArrayNotHasKey('stale-key', $entries, 'expired entries must be evicted on cache write');
+        $this->assertNotEmpty($entries, 'the fresh response must still be cached');
+    }
+
+    /**
+     * [M-OMDB-17 minor] Dead use statement: NullLogger is never referenced
+     * in OmdbApi (the logger is a nullable property used via ?->). The
+     * import must not return.
+     */
+    public function test_omdb_api_stays_free_of_the_unused_null_logger_import(): void
+    {
+        $src = (string) file_get_contents(__DIR__ . '/../../src/OmdbApi.php');
+        $this->assertIsString($src);
+        $this->assertStringNotContainsString('use Psr\Log\NullLogger;', $src);
+    }
 }
