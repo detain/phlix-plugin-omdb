@@ -2,18 +2,18 @@
 
 [![tests](https://github.com/detain/phlix-plugin-omdb/actions/workflows/test.yml/badge.svg)](https://github.com/detain/phlix-plugin-omdb/actions/workflows/test.yml)
 
-> OMDb metadata provider for [Phlix](https://github.com/detain/phlix) — IMDb/RT ratings aggregation for movies and TV.
+> OMDb metadata provider for [Phlix](https://github.com/detain/phlix-server) — IMDb and Rotten Tomatoes ratings for movies and TV.
 
 Queries the [OMDb API](https://www.omdbapi.com/) to enrich Phlix media items with
 IMDb ID and IMDb / Rotten Tomatoes ratings. Ratings are returned under the valid
-`metadata_ratings.source` ENUM values (`imdb`, `rt`); OMDb's Metascore field is
+`metadata_ratings.source` ENUM values (`imdb`, `rt`); OMDb's Metacritic rating is
 read but deliberately dropped — the ENUM has no member for it. The host resolver
 owns writing ratings and Phlix's rating aggregation.
 
 ## Features
 
 - **IMDb ID resolution** — search by title (with an optional release-year hint) to resolve the canonical IMDb ID
-- **Multi-source ratings** — captures IMDb and Rotten Tomatoes scores (Metascore is dropped — no valid `metadata_ratings.source` ENUM member)
+- **Multi-source ratings** — captures IMDb and Rotten Tomatoes scores (Metacritic is dropped — no valid `metadata_ratings.source` ENUM member)
 - **Non-blocking HTTP** — async HTTPS-only client compatible with Workerman's event loop
 - **Rate limiting** — fixed minimum spacing between calls (0.25s), plus an automatic cooldown to the next UTC midnight when OMDb reports a daily-limit envelope; the interval is not a setting
 - **Response caching** — configurable in-memory cache TTL to reduce API calls
@@ -34,8 +34,8 @@ The plugin is unsigned by design — install via the Phlix admin UI:
 
 4. The server downloads the manifest, validates it, runs `composer install --no-dev`,
    and stores a row in the `plugins` table. The plugin lands **disabled** by default.
-5. Flip the toggle in the table to enable it.
-6. Enter your OMDb API key in the plugin settings (get one at [OMDb API](https://www.omdbapi.com/apikey.aspx)).
+5. Enter your OMDb API key in the plugin settings (get one at [OMDb API](https://www.omdbapi.com/apikey.aspx)).
+6. Flip the toggle in the table to enable it.
 
 ## Settings
 
@@ -82,7 +82,8 @@ php scripts/security-audit-check.php
 
 The `composer-audit` job in `.github/workflows/test.yml` runs
 `php scripts/security-audit-check.php`, which audits the whole `composer.lock`
-(`require` and `require-dev`) and blocks on any advisory.
+(`require` and `require-dev`) and fails the job on any security advisory; see
+the script header for the full blocking policy.
 
 ## License
 

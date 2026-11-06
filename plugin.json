@@ -31,7 +31,7 @@
             "required": false,
             "tier": "advanced",
             "label": "Verify SSL",
-            "description": "Verify OMDb's TLS certificate. Keep this ON. Turning it off lets any intercepting hop read and tamper with the traffic, and OMDb authenticates with your key in the URL query string - it would be stolen. Debugging behind a proxy you control only."
+            "description": "Verify the TLS certificate presented by OMDb. Keep this ON. Turning it off lets any intercepting hop read and tamper with the traffic — including the API key that OMDb sends in the URL query string, which could be stolen. Use off only when debugging behind a proxy you control."
         },
         "cache_ttl_seconds": {
             "type": "integer",
