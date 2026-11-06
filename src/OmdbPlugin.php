@@ -41,7 +41,7 @@ use Psr\Log\NullLogger;
  * ## Configuration (plugin.json settings)
  *
  * - enabled: Enable the OMDb provider (boolean, default false)
- * - api_key: OMDb API key (string, secret) — get at http://www.omdbapi.com/apikey.aspx
+ * - api_key: OMDb API key (string, secret) — get at https://www.omdbapi.com/apikey.aspx
  * - use_ssl_verification: Verify TLS certificates (boolean, default true) —
  *   turning it off sends the key in cleartext-query to any intercepting hop
  * - cache_ttl_seconds: Cache TTL in seconds (integer, default 86400; 0 disables caching)
@@ -152,7 +152,11 @@ final class OmdbPlugin implements ConfigurableInterface, LifecycleInterface, Met
 
         $settings = $this->settings ?? new OmdbSettings();
         $apiKey = $settings->apiKey;
-        if (is_string($apiKey) === false || $apiKey === '') {
+        // [M-OMDB-19 law, PG-082] apiKey is declared ?string — a runtime
+        // type probe is double-parsing the type system. null (never
+        // configured) and '' (cleared) are the two un-configured shapes,
+        // checked directly; anything else is a string by declaration.
+        if ($apiKey === null || $apiKey === '') {
             return null;
         }
 

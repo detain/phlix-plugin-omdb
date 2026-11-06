@@ -40,9 +40,16 @@ use Workerman\Timer;
 final class OmdbApi
 {
     /**
+     * OMDb API host — the single origin this client ever dials. Pinned as
+     * the TLS `peer_name` so certificate-name verification is explicit on
+     * every http-client generation ([PG-193], see {@see tlsContext()}).
+     */
+    private const API_HOST = 'www.omdbapi.com';
+
+    /**
      * OMDb API base URL. HTTPS only — never plaintext http.
      */
-    private const API_BASE = 'https://www.omdbapi.com';
+    private const API_BASE = 'https://' . self::API_HOST;
 
     /**
      * HTTP request timeout in seconds.
@@ -165,10 +172,18 @@ final class OmdbApi
     }
 
     /**
-     * Search OMDb by title and optional year.
+     * Search OMDb by title, with an optional year hint.
+     *
+     * [PG-083] Year-hint truth: the `y=` parameter is sent alongside `s=`,
+     * but OMDb documents `y` as a disambiguator for the `t=` single-title
+     * lookup — whether the search arm honors it at all is not contractual
+     * (and this plugin's quota-bound tests cannot probe the live API).
+     * Treat the year as a hint: results are NOT guaranteed to be
+     * year-filtered, so callers needing a strict filter must match the
+     * returned `year` field themselves.
      *
      * @param string $title Title to search for
-     * @param int|null $year Optional release year
+     * @param int|null $year Optional release year, sent as a hint (see above)
      * @return list<array{imdb_id: non-empty-string, title: string, year: string, type: string}>
      */
     public function search(string $title, ?int $year = null): array
@@ -627,10 +642,20 @@ final class OmdbApi
      * the surface common to both generations is used: `Client::request($url,
      * $options)` with 'success'/'error' callbacks and a stream body on the
      * Response — anything generation-specific (Timer::sleep above, protocol
-     * classes, option keys beyond timeout/verify_ssl) is forbidden in src/.
+     * classes, option keys beyond timeout/context) is forbidden in src/.
      * Aligning require-dev with the host generation would re-resolve the
      * whole pinned lock (S440 audit-gate churn) — owner-gated, deliberately
      * not done in a fix lane; the seam tests pin this file's neutrality.
+     *
+     * [PG-193] TLS posture rides the constructor-level `context` key, which
+     * both generations read for every https connection: lock v1
+     * ConnectionPool::create() REPLACES its default (verify-off) context
+     * wholesale when `context` is non-empty; host v3 array_merge()s at the
+     * top level, so a provided `ssl` block likewise replaces its defaults
+     * (including the peer_name v3 pre-sets). Either way the context must be
+     * a COMPLETE ssl block — which is exactly what {@see tlsContext()}
+     * carries. The historical `verify_ssl` constructor key is read by
+     * neither generation and is retired here as the dead knob it always was.
      */
     private function getHttpClient(): Client
     {
@@ -638,17 +663,65 @@ final class OmdbApi
             return $this->httpClient;
         }
 
-        $options = [
-            'timeout' => self::HTTP_TIMEOUT_SEC,
-        ];
-
-        if ($this->useSslVerification === false) {
-            $options['verify_ssl'] = false;
-        }
-
-        $this->httpClient = new Client($options);
+        $this->httpClient = new Client($this->httpClientOptions());
 
         return $this->httpClient;
+    }
+
+    /**
+     * Constructor options for the shared HTTP client.
+     *
+     * Generation-neutral per [M-OMDB-13] above: `timeout` and `context` are
+     * the two keys both vendored and host http-client generations honor.
+     * Pinned in full by tests — a key or shape drift here reddens before it
+     * can silently turn TLS verification back off.
+     *
+     * @return array<string, mixed>
+     */
+    private function httpClientOptions(): array
+    {
+        return [
+            'timeout' => self::HTTP_TIMEOUT_SEC,
+            'context' => $this->tlsContext(),
+        ];
+    }
+
+    /**
+     * Explicit TLS stream context — verification is never library-defaulted.
+     *
+     * Both http-client generations construct https connections with
+     * verify_peer=false + verify_peer_name=false (+ allow_self_signed on
+     * the host generation). Leaving that default in place would send the
+     * apikey query parameter to any intercepting hop presenting any
+     * certificate — so this seam ALWAYS passes a complete `ssl` block,
+     * mirroring the host's Hub HttpClient::tlsContext() posture [PG-193].
+     *
+     * Verify-on (default): full chain + name validation against the system
+     * trust store, with SNI/peer_name stated explicitly for the single
+     * constant host this client ever dials (not relying on either
+     * generation's merge/replace timing to set it).
+     * Verify-off: the operator's explicit plugin-setting opt-out — the
+     * deliberately insecure arm, documented at the settings surface as
+     * leaking the key in cleartext-query to any intercepting hop.
+     *
+     * @return array{ssl: array<string, bool|string>}
+     */
+    private function tlsContext(): array
+    {
+        if ($this->useSslVerification === false) {
+            return ['ssl' => [
+                'verify_peer' => false,
+                'verify_peer_name' => false,
+                'allow_self_signed' => true,
+            ]];
+        }
+
+        return ['ssl' => [
+            'peer_name' => self::API_HOST,
+            'verify_peer' => true,
+            'verify_peer_name' => true,
+            'allow_self_signed' => false,
+        ]];
     }
 
     /**

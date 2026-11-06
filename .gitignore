@@ -1,5 +1,7 @@
 /vendor/
-/composer.lock
+# [PG-085] No /composer.lock entry here on purpose: the lock IS committed
+# (S440 whole-lock audit pin, floors pinned to its package count) — the old
+# ignore line contradicted tracked reality.
 /coverage.xml
 /coverage-report/
 /.phpunit.cache/

@@ -517,21 +517,79 @@ final class OmdbApiTest extends TestCase
     }
 
     /**
-     * Test getHttpClient creates client with SSL verification disabled.
-     * This exercises the verify_ssl = false path in getHttpClient.
-     * Note: We cannot directly inspect Workerman\Client internals, but we verify
-     * the method executes without error and returns a valid client.
+     * [PG-193] The default posture must hand the transport a COMPLETE,
+     * verifying ssl context. Both http-client generations default https
+     * conns to verify_peer=false, so asserting the constructed option
+     * array — not merely that a Client builds — is what keeps TLS on.
+     * Pinned with assertSame on the whole ssl block: any missing, extra,
+     * or reordered key reddens this before it can silently opt out.
      */
-    public function test_get_http_client_disables_ssl_verification(): void
+    public function test_http_client_options_verify_tls_by_default(): void
+    {
+        $api = new OmdbApi('key');
+
+        $method = new \ReflectionMethod(OmdbApi::class, 'httpClientOptions');
+        $method->setAccessible(true);
+        $options = $method->invoke($api);
+
+        $this->assertSame(
+            ['timeout', 'context'],
+            array_keys($options),
+            'only the generation-neutral constructor keys may be sent',
+        );
+        $this->assertSame(
+            ['ssl' => [
+                'peer_name' => 'www.omdbapi.com',
+                'verify_peer' => true,
+                'verify_peer_name' => true,
+                'allow_self_signed' => false,
+            ]],
+            $options['context'],
+        );
+    }
+
+    /**
+     * [PG-193] The opt-out arm must be explicit, not the library default:
+     * a complete insecure ssl block (mirroring the host Hub client's
+     * documented opt-out), with the dead `verify_ssl` key retired —
+     * neither vendored (v1) nor host (v3) generation ever read it.
+     */
+    public function test_http_client_options_ssl_opt_out_is_explicit_insecure_block(): void
     {
         $api = new OmdbApi('key', false, 0); // useSslVerification = false
 
-        $method = new \ReflectionMethod(OmdbApi::class, 'getHttpClient');
+        $method = new \ReflectionMethod(OmdbApi::class, 'httpClientOptions');
         $method->setAccessible(true);
-        $client = $method->invoke($api);
+        $options = $method->invoke($api);
 
-        $this->assertInstanceOf(\Workerman\Http\Client::class, $client);
-        $this->assertNotSame($api, $client);
+        $this->assertArrayNotHasKey('verify_ssl', $options);
+        $this->assertSame(
+            ['ssl' => [
+                'verify_peer' => false,
+                'verify_peer_name' => false,
+                'allow_self_signed' => true,
+            ]],
+            $options['context'],
+        );
+    }
+
+    /**
+     * Both arms must still hand a live Client to the caller — the options
+     * above are consumed at construction, so this keeps the wiring honest
+     * end-to-end for each verification posture.
+     */
+    public function test_get_http_client_constructs_under_both_ssl_postures(): void
+    {
+        foreach ([true, false] as $verify) {
+            $api = new OmdbApi('key', $verify, 0);
+
+            $method = new \ReflectionMethod(OmdbApi::class, 'getHttpClient');
+            $method->setAccessible(true);
+            $client = $method->invoke($api);
+
+            $this->assertInstanceOf(\Workerman\Http\Client::class, $client);
+            $this->assertNotSame($api, $client);
+        }
     }
 
     /**

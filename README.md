@@ -12,7 +12,7 @@ owns writing ratings and Phlix's rating aggregation.
 
 ## Features
 
-- **IMDb ID resolution** — search by title + year to resolve the canonical IMDb ID
+- **IMDb ID resolution** — search by title (with an optional release-year hint) to resolve the canonical IMDb ID
 - **Multi-source ratings** — captures IMDb and Rotten Tomatoes scores (Metascore is dropped — no valid `metadata_ratings.source` ENUM member)
 - **Non-blocking HTTP** — async HTTPS-only client compatible with Workerman's event loop
 - **Rate limiting** — fixed minimum spacing between calls (0.25s), plus an automatic cooldown to the next UTC midnight when OMDb reports a daily-limit envelope; the interval is not a setting
@@ -56,8 +56,11 @@ The `api_key` setting is required. Request a free key at
 When enabled, the plugin registers as a `MetadataSourceInterface` provider. When
 the Phlix metadata manager requests details for a media item:
 
-1. The plugin receives the search query (title + optional year)
-2. It queries OMDb's search endpoint to find matching entries
+1. The plugin receives the search query (title + optional year hint)
+2. It queries OMDb's search endpoint to find matching entries — the year is
+   sent as `y=`, but OMDb only documents it as a disambiguator for the
+   single-title (`t=`) lookup, so search results are not guaranteed to be
+   year-filtered; callers that need a strict filter match the returned year
 3. It fetches full details including ratings for the selected IMDb ID
 4. Ratings are returned as a `ratings` list using the `metadata_ratings.source`
    ENUM values (`imdb`, `rt`) for the host resolver to persist and aggregate
