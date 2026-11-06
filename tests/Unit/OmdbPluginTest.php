@@ -14,6 +14,7 @@ namespace Phlix\Plugins\Metadata\Omdb\Tests;
 use Phlix\Plugins\Metadata\Omdb\OmdbApi;
 use Phlix\Plugins\Metadata\Omdb\OmdbPlugin;
 use Phlix\Plugins\Metadata\Omdb\OmdbSettings;
+use Phlix\Plugins\Metadata\Omdb\Tests\Support\OmdbCapturingLogger;
 use Phlix\Shared\Plugin\ConfigurableInterface;
 use PHPUnit\Framework\TestCase;
 use Psr\Container\ContainerInterface;
@@ -1014,5 +1015,35 @@ final class OmdbPluginTest extends TestCase
         $src = (string) file_get_contents(__DIR__ . '/../../src/OmdbPlugin.php');
         $this->assertIsString($src);
         $this->assertStringNotContainsString('is_array(', $src);
+    }
+
+    /**
+     * [PG-196] configure() surfaces boundary drift: mistyped settings_json
+     * keys land on their fail-safe default AND name themselves in one
+     * warning. Key NAMES only — a mistyped api_key value is still a secret.
+     */
+    public function test_configure_logs_rejected_setting_keys_without_their_values(): void
+    {
+        $logger = new OmdbCapturingLogger();
+        $plugin = new OmdbPlugin(logger: $logger);
+
+        $plugin->configure(['enabled' => true, 'api_key' => 'k', 'cache_ttl_seconds' => 'not-a-number']);
+
+        $this->assertCount(1, $logger->records);
+        [$message, $context] = $logger->records[0];
+        $this->assertSame('OMDb settings discarded mistyped values (defaults applied)', $message);
+        $this->assertSame(['cache_ttl_seconds'], $context['keys']);
+        $this->assertStringNotContainsString('not-a-number', serialize($context));
+    }
+
+    public function test_configure_with_clean_settings_logs_no_drift_warning(): void
+    {
+        $logger = new OmdbCapturingLogger();
+        $plugin = new OmdbPlugin(logger: $logger);
+
+        $plugin->configure(['enabled' => true, 'api_key' => 'k', 'cache_ttl_seconds' => '3600']);
+
+        $this->assertSame([], $logger->records);
+        $this->assertSame(3600, $plugin->getSettings()->cacheTtlSeconds);
     }
 }

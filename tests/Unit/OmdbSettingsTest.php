@@ -183,4 +183,71 @@ final class OmdbSettingsTest extends TestCase
         $s3 = new OmdbSettings(enabled: true, apiKey: 'key');
         $this->assertTrue($s3->isConfigured());
     }
+
+    // ------------------------------------------------------------------
+    // W06 wave [PG-196/PG-198]: boundary drift surfaces; TTL clamp
+    // ------------------------------------------------------------------
+
+    public function test_from_array_coerces_a_numeric_string_cache_ttl(): void
+    {
+        $settings = OmdbSettings::fromArray(['cache_ttl_seconds' => '3600']);
+
+        $this->assertSame(3600, $settings->cacheTtlSeconds);
+        $this->assertSame([], $settings->rejectedKeys);
+    }
+
+    public function test_negative_cache_ttl_maps_to_explicit_disable(): void
+    {
+        $this->assertSame(0, OmdbSettings::fromArray(['cache_ttl_seconds' => -1])->cacheTtlSeconds);
+        $this->assertSame(0, OmdbSettings::fromArray(['cache_ttl_seconds' => '-5'])->cacheTtlSeconds);
+    }
+
+    public function test_huge_cache_ttl_is_clamped_to_thirty_days(): void
+    {
+        $this->assertSame(2_592_000, OmdbSettings::fromArray(['cache_ttl_seconds' => 10_000_000])->cacheTtlSeconds);
+        // The boundary itself stays intact, and so does the documented default.
+        $this->assertSame(2_592_000, OmdbSettings::fromArray(['cache_ttl_seconds' => 2_592_000])->cacheTtlSeconds);
+        $this->assertSame(86400, OmdbSettings::fromArray([])->cacheTtlSeconds);
+    }
+
+    public function test_from_array_surfaces_every_mistyped_key_in_check_order(): void
+    {
+        $settings = OmdbSettings::fromArray([
+            'enabled' => 1,
+            'api_key' => ['nested'],
+            'use_ssl_verification' => 'false',
+            'cache_ttl_seconds' => 'not-a-number',
+        ]);
+
+        $this->assertSame(
+            ['enabled', 'api_key', 'use_ssl_verification', 'cache_ttl_seconds'],
+            $settings->rejectedKeys
+        );
+        // Fail-safe values behind the disclosure are unchanged from the defaults.
+        $this->assertFalse($settings->enabled);
+        $this->assertNull($settings->apiKey);
+        $this->assertTrue($settings->useSslVerification);
+        $this->assertSame(86400, $settings->cacheTtlSeconds);
+    }
+
+    public function test_from_array_with_clean_types_reports_no_rejected_keys(): void
+    {
+        $settings = OmdbSettings::fromArray([
+            'enabled' => true,
+            'api_key' => 'abc123',
+            'use_ssl_verification' => false,
+            'cache_ttl_seconds' => 60,
+        ]);
+
+        $this->assertSame([], $settings->rejectedKeys);
+        $this->assertTrue($settings->enabled);
+    }
+
+    public function test_explicit_null_api_key_is_not_drift(): void
+    {
+        $settings = OmdbSettings::fromArray(['api_key' => null]);
+
+        $this->assertNull($settings->apiKey);
+        $this->assertSame([], $settings->rejectedKeys);
+    }
 }

@@ -13,8 +13,9 @@ owns writing ratings and Phlix's rating aggregation.
 ## Features
 
 - **IMDb ID resolution** — search by title (with an optional release-year hint) to resolve the canonical IMDb ID
-- **Multi-source ratings** — captures IMDb and Rotten Tomatoes scores (Metacritic is dropped — no valid `metadata_ratings.source` ENUM member)
-- **Non-blocking HTTP** — async HTTPS-only client compatible with Workerman's event loop
+- **Multi-source ratings** — captures IMDb and Rotten Tomatoes scores
+- **Async HTTP** — HTTPS-only Workerman client, with a bounded blocking-cURL
+  fallback for event loops (Swoole) where async TLS reads cannot complete
 - **Rate limiting** — fixed minimum spacing between calls (0.25s), plus an automatic cooldown to the next UTC midnight when OMDb reports a daily-limit envelope; the interval is not a setting
 - **Response caching** — configurable in-memory cache TTL to reduce API calls
 - **TLS verification toggle** — advanced escape hatch that disables certificate checking. OMDb authenticates with your key in the URL **query string**, so unverified TLS lets an intercepting hop harvest the API key. Keep it on; use off only when debugging behind a proxy you control

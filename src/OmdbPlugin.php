@@ -25,7 +25,7 @@ use Psr\Log\NullLogger;
  * This is a PURE READ source: {@see getDetails()} fetches, shapes, and returns
  * data only — it performs no persistence. Ratings are emitted under the host
  * `metadata_ratings.source` ENUM values (`imdb`, `rt`); the host resolver
- * (F2) owns writing them and computing any aggregate.
+ * owns writing them and computing any aggregate.
  *
  * ## Features
  *
@@ -87,6 +87,16 @@ final class OmdbPlugin implements ConfigurableInterface, LifecycleInterface, Met
     public function configure(array $settings): void
     {
         $this->settings = OmdbSettings::fromArray($settings);
+
+        // [PG-196] Boundary drift is surfaced, not swallowed: every key whose
+        // stored type failed translation landed on its fail-safe default and
+        // is named here. Only key NAMES are logged — a mistyped api_key value
+        // is still a secret, whatever shape it arrived in.
+        if ($this->settings->rejectedKeys !== []) {
+            $this->logger?->warning('OMDb settings discarded mistyped values (defaults applied)', [
+                'keys' => $this->settings->rejectedKeys,
+            ]);
+        }
 
         // [M-OMDB-06 minor] A rotated api_key must reach the wire: drop the
         // self-built transport so the next read rebuilds it from the fresh
@@ -271,7 +281,7 @@ final class OmdbPlugin implements ConfigurableInterface, LifecycleInterface, Met
      * Fetch the full metadata record for an IMDb ID.
      *
      * This is a PURE READ: fetch, shape, return. It performs NO persistence
-     * and ignores any `media_item_id` hint — the host resolver (F2) owns the
+     * and ignores any `media_item_id` hint — the host resolver owns the
      * media_item_id and drives writing ratings/fields into the DB. Results are
      * intended to merge UNDER TMDB (gap-fill only).
      *

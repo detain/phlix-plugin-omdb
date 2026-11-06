@@ -1254,10 +1254,15 @@ final class OmdbApiTest extends TestCase
      */
     public function test_redaction_masks_key_and_preserves_trailing_parameters(): void
     {
+        // [PG-197 rotation] redactSecrets is instance-aware now (the literal
+        // key pass needs the key); invoke on an instance whose key is NOT the
+        // one embedded here, pinning that pass 1 (the named-parameter pattern)
+        // scrubs any key, this instance's or not.
+        $api = new OmdbApi('other-instance-key');
         $redact = new \ReflectionMethod(OmdbApi::class, 'redactSecrets');
         $redact->setAccessible(true);
         /** @var string $masked */
-        $masked = $redact->invoke(null, 'https://x.test/?a=1&apikey=SECRET&plot=full');
+        $masked = $redact->invoke($api, 'https://x.test/?a=1&apikey=SECRET&plot=full');
 
         $this->assertSame('https://x.test/?a=1&apikey=' . OmdbApi::MASKED_APIKEY . '&plot=full', $masked);
     }
@@ -1268,15 +1273,16 @@ final class OmdbApiTest extends TestCase
      */
     public function test_redaction_boundaries_and_cases(): void
     {
+        $api = new OmdbApi('abc123');
         $redact = new \ReflectionMethod(OmdbApi::class, 'redactSecrets');
         $redact->setAccessible(true);
         $mask = 'apikey=' . OmdbApi::MASKED_APIKEY;
 
-        $this->assertSame('boom apikey=*** now', $redact->invoke(null, 'boom apikey=abc123 now'));
-        $this->assertSame($mask, $redact->invoke(null, 'APIKEY=abc123'));
+        $this->assertSame('boom apikey=*** now', $redact->invoke($api, 'boom apikey=abc123 now'));
+        $this->assertSame($mask, $redact->invoke($api, 'APIKEY=abc123'));
         $fragmentUrl = 'https://x.test/?apikey=abc#frag';
-        $this->assertSame('https://x.test/?' . $mask . '#frag', $redact->invoke(null, $fragmentUrl));
-        $this->assertSame('no keys here', $redact->invoke(null, 'no keys here'));
+        $this->assertSame('https://x.test/?' . $mask . '#frag', $redact->invoke($api, $fragmentUrl));
+        $this->assertSame('no keys here', $redact->invoke($api, 'no keys here'));
     }
 
     /**
@@ -1705,5 +1711,139 @@ final class OmdbApiTest extends TestCase
         $src = (string) file_get_contents(__DIR__ . '/../../src/OmdbApi.php');
         $this->assertIsString($src);
         $this->assertStringNotContainsString('use Psr\Log\NullLogger;', $src);
+    }
+
+    // -------------------------------------------------------------------------
+    // W06 wave [PG-194/PG-195/PG-197]: event-loop TLS law, backstop warning,
+    // instance-aware redaction
+    // -------------------------------------------------------------------------
+
+    /**
+     * [PG-194] Event-loop TLS law: under the Swoole adapter the vendored/host
+     * async http-client's TLS reads stall after the handshake, so an https
+     * dispatch must take the bounded blocking-curl transport INSTEAD of the
+     * async client — the shape every server-side HTTP client already honors.
+     */
+    public function test_swoole_loop_reroutes_https_dispatch_to_the_blocking_curl_transport(): void
+    {
+        $api = new OmdbApi('key', true, 0);
+        $client = new OmdbFakeHttpClient();
+        $this->injectClient($api, $client);
+
+        $curlUrl = null;
+        $seam = new \ReflectionProperty(OmdbApi::class, 'curlTransport');
+        $seam->setAccessible(true);
+        $seam->setValue($api, static function (string $url) use (&$curlUrl): array {
+            $curlUrl = $url;
+
+            return ['body' => '{"Response":"True","Title":"Inception"}', 'error' => ''];
+        });
+
+        $original = \Workerman\Worker::$eventLoopClass;
+        \Workerman\Worker::$eventLoopClass = 'Workerman\\Events\\Swoole';
+        try {
+            $result = $api->getByImdbId('tt1375666');
+        } finally {
+            \Workerman\Worker::$eventLoopClass = $original;
+        }
+
+        $this->assertIsArray($result);
+        $this->assertSame('Inception', $result['Title']);
+        $this->assertNotNull($curlUrl, 'the blocking transport must have run');
+        $this->assertStringContainsString('i=tt1375666', (string) $curlUrl);
+        $this->assertNull($client->lastUrl, 'the async transport must stay untouched under Swoole');
+    }
+
+    /**
+     * [PG-194] The reroute is loop-conditional: without the Swoole adapter in
+     * force the async client path is unchanged, and the curl seam must never
+     * run (tests would reach the network otherwise).
+     */
+    public function test_default_event_loop_still_uses_the_async_transport_and_never_curl(): void
+    {
+        $api = new OmdbApi('key', true, 0);
+        $body = json_encode(['Response' => 'True', 'Title' => 'Inception']);
+        $this->assertIsString($body);
+        $this->injectClient($api, OmdbFakeHttpClient::withBody($body));
+
+        $curlCalled = false;
+        $seam = new \ReflectionProperty(OmdbApi::class, 'curlTransport');
+        $seam->setAccessible(true);
+        $seam->setValue($api, static function (string $url) use (&$curlCalled): array {
+            $curlCalled = true;
+
+            return ['body' => '', 'error' => 'must not run'];
+        });
+
+        $result = $api->getByImdbId('tt1375666');
+
+        $this->assertIsArray($result);
+        $this->assertFalse($curlCalled, 'curl must not run outside the Swoole loop');
+    }
+
+    /**
+     * [PG-194] Source pin for the curl arm: the fallback is BOUNDED and
+     * HTTPS-only, and its TLS posture follows the same operator toggle as the
+     * async context ([PG-193]) instead of silently re-opening the hole. A
+     * library-default timeout/unbounded redirect/always-on verify here would
+     * all be silent regressions the behavioral tests cannot see.
+     */
+    public function test_curl_fallback_pins_https_only_bounded_verification_honoring_options(): void
+    {
+        $src = (string) file_get_contents(__DIR__ . '/../../src/OmdbApi.php');
+        $this->assertIsString($src);
+
+        $this->assertSame(1, substr_count($src, 'CURLOPT_TIMEOUT => self::HTTP_TIMEOUT_SEC'));
+        $this->assertSame(1, substr_count($src, 'CURLOPT_CONNECTTIMEOUT => self::HTTP_TIMEOUT_SEC'));
+        $this->assertSame(1, substr_count($src, 'CURLOPT_PROTOCOLS => CURLPROTO_HTTPS'));
+        $this->assertSame(1, substr_count($src, 'CURLOPT_REDIR_PROTOCOLS => CURLPROTO_HTTPS'));
+        $this->assertSame(1, substr_count($src, 'CURLOPT_SSL_VERIFYPEER => $this->useSslVerification'));
+        $this->assertSame(1, substr_count($src, 'CURLOPT_SSL_VERIFYHOST => $this->useSslVerification ? 2 : 0'));
+        $this->assertMatchesRegularExpression('/Worker::\$eventLoopClass/', $src);
+    }
+
+    /**
+     * [PG-195] The poll backstop was the only silent failure class: a wedged
+     * transport (callbacks never fire) resolved to null with zero log output.
+     * The backstop exit now warns, URL redacted like every other sink.
+     */
+    public function test_backstop_timeout_warns_with_redacted_url(): void
+    {
+        $logger = new OmdbCapturingLogger();
+        $api = new OmdbApi(self::CANARY_KEY, true, 0, $logger);
+
+        $sleep = new \ReflectionProperty(OmdbApi::class, 'timerSleep');
+        $sleep->setAccessible(true);
+        $sleep->setValue($api, static function (float $seconds): void {
+        });
+        $this->injectClient($api, OmdbFakeHttpClient::neverCompletes());
+
+        $this->assertNull($api->getByImdbId('tt0120737'));
+
+        $this->assertCount(1, $logger->records);
+        [$message, $context] = $logger->records[0];
+        $this->assertSame('OMDb request timed out: no transport callback before the poll backstop', $message);
+        $this->assertStringNotContainsString(self::CANARY_KEY, serialize($context));
+        $this->assertStringContainsString('apikey=' . OmdbApi::MASKED_APIKEY, (string) $context['url']);
+    }
+
+    /**
+     * [PG-197] Redaction is instance-aware: a transport diagnostic echoing the
+     * bare key value (without the apikey parameter name the pattern mask
+     * requires) is scrubbed by the literal-value second pass.
+     */
+    public function test_bare_key_value_in_a_diagnostic_is_masked_by_the_literal_pass(): void
+    {
+        $logger = new OmdbCapturingLogger();
+        $api = new OmdbApi(self::CANARY_KEY, true, 0, $logger);
+        $this->injectFailingClient($api, 'transport diagnostic leaked ' . self::CANARY_KEY . ' without a parameter name');
+
+        $api->search('Batman');
+
+        $this->assertCount(1, $logger->records);
+        [, $context] = $logger->records[0];
+        $this->assertStringNotContainsString(self::CANARY_KEY, serialize($context));
+        $this->assertStringContainsString(OmdbApi::MASKED_APIKEY, (string) $context['error']);
+        $this->assertStringContainsString('without a parameter name', (string) $context['error']);
     }
 }

@@ -15,6 +15,7 @@ use Psr\Log\LoggerInterface;
 use Workerman\Http\Client;
 use Workerman\Http\Response;
 use Workerman\Timer;
+use Workerman\Worker;
 
 /**
  * HTTP client for the OMDb API.
@@ -23,19 +24,19 @@ use Workerman\Timer;
  * cooldown, caching, SSL verification toggling, and async/non-blocking
  * patterns.
  *
- * ## Daily-limit posture (free tier: 1000 requests/day)
+ * ## Daily-limit posture (free tier: 1,000 requests/day)
  *
  * OMDb signals quota exhaustion with a `{"Response":"False","Error":"API key
  * is over its daily limit."}` envelope (as HTTP 200 or 403 — the vendored
  * transport surfaces both identically). {@see httpGetJson()} classifies that
  * envelope apart from a plain "title not found", logs a distinguishable
  * warning, and cools the key down until the next UTC midnight (the reset
- * boundary): further cache-missing lookups short-circuit without touching the
+ * boundary): further cache-miss lookups short-circuit without touching the
  * network, so one dead key cannot turn into a retry-storm against a wall.
  * The cooldown is process-local by design — the plugin owns no cross-worker
  * store (persisting across restarts is a known follow-up); the host-side
- * `SourceRateLimiter` in phlix-server paces dispatch (~90s spacing for omdb)
- * as the belt, this cooldown is the braces.
+ * `SourceRateLimiter` in phlix-server is the belt (it paces dispatch at
+ * ~90s spacing for omdb), this cooldown is the braces.
  */
 final class OmdbApi
 {
@@ -55,6 +56,15 @@ final class OmdbApi
      * HTTP request timeout in seconds.
      */
     private const HTTP_TIMEOUT_SEC = 10;
+
+    /**
+     * Class name the Swoole event adapter carries in
+     * {@see \Workerman\Worker}::$eventLoopClass when the host runs
+     * `Worker::$eventLoopClass = Workerman\Events\Swoole` (set in production
+     * at phlix-server start.php). Compared as a STRING so this file never
+     * loads — or requires — ext-swoole [PG-194].
+     */
+    private const SWOOLE_EVENT_LOOP_CLASS = 'Workerman\\Events\\Swoole';
 
     /**
      * Minimum interval between API requests in seconds (rate protection).
@@ -133,6 +143,17 @@ final class OmdbApi
     private ?\Closure $jsonFetcher = null;
 
     /**
+     * Blocking-cURL transport seam for the [PG-194] event-loop TLS fallback.
+     * Returns the raw response body plus a transport error string (empty on
+     * success): `function(string $url): array{body: string, error: string}`.
+     * Defaults to the real cURL round trip; tests override it so the reroute
+     * law is assertable without ever touching the network.
+     *
+     * @var \Closure(string): array{body: string, error: string}
+     */
+    private \Closure $curlTransport;
+
+    /**
      * @param string $apiKey OMDb API key
      * @param bool $useSslVerification Whether to verify TLS certificates
      * @param int $cacheTtlSeconds Cache TTL in seconds (0 = disabled)
@@ -147,6 +168,9 @@ final class OmdbApi
         ?\Closure $jsonFetcher = null,
     ) {
         $this->jsonFetcher = $jsonFetcher;
+        $this->curlTransport = function (string $url): array {
+            return $this->performCurlRequest($url);
+        };
         $this->timerSleep = static function (float $seconds): void {
             // [M-OMDB-13] Select on the METHOD, not the class: workerman v4
             // (this repo's lock generation) ships Timer without sleep(), so
@@ -350,18 +374,33 @@ final class OmdbApi
     }
 
     /**
-     * Mask the apikey parameter wherever it appears in a string.
+     * Mask the apikey wherever it appears in a string — instance-aware.
      *
      * OMDb authenticates with a query-string key, so any URL (or exception
      * message embedding one) must pass through here before it can reach a
-     * log or exception surface. The masked run stops at the first delimiter a
-     * percent-encoded value can never contain ('&', whitespace, a quote, or
-     * the '#' fragment start) so surrounding diagnostics stay readable; '='
-     * deliberately stays inside the run because a copied URL could carry it.
+     * log or exception surface. Two passes, two shapes [PG-197]:
+     *
+     * 1. The named-parameter pattern: the masked run stops at the first
+     *    delimiter a percent-encoded value can never contain ('&',
+     *    whitespace, a quote, or the '#' fragment start) so surrounding
+     *    diagnostics stay readable; '=' deliberately stays inside the run
+     *    because a copied URL could carry it. This pass scrubs ANY key in
+     *    that parameter shape — including a rotated-away key still embedded
+     *    in an old URL surfaced by the transport.
+     * 2. The literal value of this instance's key, wherever it appears bare
+     *    (a future transport diagnostic echoing the key without its
+     *    parameter name would otherwise slip past pass 1). Skipped for an
+     *    empty key, which as a search term would shred every message.
      */
-    private static function redactSecrets(string $text): string
+    private function redactSecrets(string $text): string
     {
-        return (string) preg_replace('/apikey=[^&\s"\'#]+/i', 'apikey=' . self::MASKED_APIKEY, $text);
+        $masked = (string) preg_replace('/apikey=[^&\s"\'#]+/i', 'apikey=' . self::MASKED_APIKEY, $text);
+
+        if ($this->apiKey !== '') {
+            $masked = str_replace($this->apiKey, self::MASKED_APIKEY, $masked);
+        }
+
+        return $masked;
     }
 
     /**
@@ -396,7 +435,7 @@ final class OmdbApi
         // burn the dead key again until its UTC-day reset.
         if ($this->overLimitCooldownUntil > time()) {
             $this->logger?->info('OMDb request suppressed: API key over its daily limit (cooldown active)', [
-                'url' => self::redactSecrets($url),
+                'url' => $this->redactSecrets($url),
             ]);
 
             return null;
@@ -407,6 +446,16 @@ final class OmdbApi
         if ($this->jsonFetcher !== null) {
             /** @var array<string, mixed>|null $response */
             $response = ($this->jsonFetcher)($url);
+
+            return $this->admitResponse($response, $url, $cacheKey);
+        }
+
+        // [PG-194] Event-loop TLS law: under the Swoole adapter, the async
+        // client's TLS reads stall after the handshake, so every https cache
+        // miss would burn the full timeout and die. Reroute to the bounded
+        // blocking cURL transport instead of letting it false-timeout.
+        if ($this->requiresBlockingCurl($url) === true) {
+            $response = $this->httpGetJsonCurl($url);
 
             return $this->admitResponse($response, $url, $cacheKey);
         }
@@ -455,6 +504,19 @@ final class OmdbApi
 
         $this->waitForResponse($state);
 
+        // [PG-195] The backstop was the only silent failure class: a wedged
+        // transport (no callback ever fires) resolved to null with zero log
+        // output. A stalled transport must announce itself like every other
+        // one does — URL redacted at the sink, same as the error arm below.
+        if ($state['done'] === false) {
+            $this->logger?->warning('OMDb request timed out: no transport callback before the poll backstop', [
+                'url' => $this->redactSecrets($url),
+                'backstop_sec' => self::HTTP_TIMEOUT_SEC + 1,
+            ]);
+
+            return null;
+        }
+
         if ($state['error'] !== null) {
             $error = $state['error'];
             $errorMessage = $error instanceof \Throwable ? $error->getMessage() : 'Unknown error';
@@ -462,8 +524,8 @@ final class OmdbApi
             // itself, or an exception message that embeds it) — redact at the
             // sink so the secret never reaches a log stream. Review omdb__srphp C1.
             $this->logger?->warning('OMDb HTTP error', [
-                'url' => self::redactSecrets($url),
-                'error' => self::redactSecrets($errorMessage),
+                'url' => $this->redactSecrets($url),
+                'error' => $this->redactSecrets($errorMessage),
             ]);
 
             return null;
@@ -607,7 +669,7 @@ final class OmdbApi
         $this->overLimitCooldownUntil = $resetsAt;
 
         $this->logger?->warning('OMDb API key is over its daily limit; cooldown armed until the UTC day rolls over', [
-            'url' => self::redactSecrets($url),
+            'url' => $this->redactSecrets($url),
             'cooldown_until_utc' => gmdate('Y-m-d H:i:s', $resetsAt),
             'cooldown_seconds' => $resetsAt - $this->utcNow(),
         ]);
@@ -646,6 +708,14 @@ final class OmdbApi
      * Aligning require-dev with the host generation would re-resolve the
      * whole pinned lock (S440 audit-gate churn) — owner-gated, deliberately
      * not done in a fix lane; the seam tests pin this file's neutrality.
+     *
+     * [PG-194] The contract has a LOOP half, not just a class surface: even
+     * where the API matches, async https only completes while the running
+     * event loop actually delivers TLS reads. Under the Swoole adapter the
+     * host runs in production it never does (see
+     * {@see requiresBlockingCurl()}), so correctness there rides the bounded
+     * blocking cURL seam — ext-curl is declared in composer.json because
+     * this arm is no longer optional on the live host.
      *
      * [PG-193] TLS posture rides the constructor-level `context` key, which
      * both generations read for every https connection: lock v1
@@ -722,6 +792,132 @@ final class OmdbApi
             'verify_peer_name' => true,
             'allow_self_signed' => false,
         ]];
+    }
+
+    /**
+     * Whether the current event loop forces the blocking cURL transport.
+     *
+     * [PG-194] The estate event-loop TLS law (phlix-server
+     * src/Common/Http/EventLoopTls.php): under
+     * `Worker::$eventLoopClass = Workerman\Events\Swoole`, client-side TLS
+     * streams stall after the handshake — Swoole's epoll watches the raw fd
+     * while OpenSSL buffers the response bytes internally, so the read
+     * callback never fires. Production pins that adapter (server start.php),
+     * which made this plugin's async-only https dispatch structurally dead on
+     * the live host: every cache-miss lookup burned HTTP_TIMEOUT_SEC and died
+     * with a transport error. Detection mirrors the host helper's own
+     * comparison (a plain string check of $eventLoopClass — ext-swoole is
+     * never loaded here), and every server-side HTTP client that crosses this
+     * boundary answers it with a bounded blocking cURL fetch; this one now
+     * does too. Blocking the worker is the registered, measured posture: a
+     * bounded ≤HTTP_TIMEOUT_SEC stall on a low-frequency, quota-paced
+     * enrichment call (host spacing ~90s) beats a request that can never
+     * complete.
+     */
+    private function requiresBlockingCurl(string $url): bool
+    {
+        if (stripos($url, 'https://') !== 0) {
+            return false;
+        }
+
+        return Worker::$eventLoopClass === self::SWOOLE_EVENT_LOOP_CLASS;
+    }
+
+    /**
+     * Blocking cURL GET, decoded through the same envelope law as the async
+     * arm — the [PG-194] fallback transport. Failures reach the identical
+     * redacted 'OMDb HTTP error' sink.
+     *
+     * @return array<string, mixed>|null Decoded envelope or null on failure
+     */
+    private function httpGetJsonCurl(string $url): ?array
+    {
+        /** @var array{body: string, error: string} $result */
+        $result = ($this->curlTransport)($url);
+
+        if ($result['error'] !== '') {
+            // cURL error text can embed the request URL — redact at the sink.
+            $this->logger?->warning('OMDb HTTP error', [
+                'url' => $this->redactSecrets($url),
+                'error' => $this->redactSecrets($result['error']),
+            ]);
+
+            return null;
+        }
+
+        if ($result['body'] === '') {
+            // Same shape the async arm produces for an empty body: null.
+            return null;
+        }
+
+        try {
+            /** @var mixed $decoded */
+            $decoded = json_decode($result['body'], true, 16, JSON_THROW_ON_ERROR);
+        } catch (\JsonException $e) {
+            $this->logger?->warning('OMDb HTTP error', [
+                'url' => $this->redactSecrets($url),
+                'error' => $this->redactSecrets($e->getMessage()),
+            ]);
+
+            return null;
+        }
+
+        if (is_array($decoded) === false) {
+            $this->logger?->warning('OMDb HTTP error', [
+                'url' => $this->redactSecrets($url),
+                'error' => 'OMDb response body is not a JSON object',
+            ]);
+
+            return null;
+        }
+
+        /** @var array<string, mixed> $decoded */
+        return $decoded;
+    }
+
+    /**
+     * The real blocking round trip behind {@see $curlTransport}.
+     *
+     * Bounded and HTTPS-only: CURLOPT_TIMEOUT/CONNECTTIMEOUT carry the same
+     * bound the async client was configured with, PROTOCOLS/REDIR_PROTOCOLS
+     * keep a redirect from walking the key-bearing request down to plain
+     * http, and the TLS pins answer the same operator toggle the stream
+     * context does ([PG-193]) — the opt-out arm stays explicit, never a
+     * library default.
+     *
+     * @return array{body: string, error: string}
+     */
+    private function performCurlRequest(string $url): array
+    {
+        $handle = curl_init($url);
+        if ($handle === false) {
+            return ['body' => '', 'error' => 'cURL init failed'];
+        }
+
+        curl_setopt_array($handle, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_TIMEOUT => self::HTTP_TIMEOUT_SEC,
+            CURLOPT_CONNECTTIMEOUT => self::HTTP_TIMEOUT_SEC,
+            CURLOPT_FOLLOWLOCATION => false,
+            CURLOPT_PROTOCOLS => CURLPROTO_HTTPS,
+            CURLOPT_REDIR_PROTOCOLS => CURLPROTO_HTTPS,
+            CURLOPT_SSL_VERIFYPEER => $this->useSslVerification,
+            CURLOPT_SSL_VERIFYHOST => $this->useSslVerification ? 2 : 0,
+        ]);
+
+        $raw = curl_exec($handle);
+        $errno = curl_errno($handle);
+        $error = curl_error($handle);
+        curl_close($handle);
+
+        if ($errno !== 0 || is_string($raw) === false) {
+            return [
+                'body' => '',
+                'error' => $error !== '' ? $error : 'cURL transport error (errno ' . $errno . ')',
+            ];
+        }
+
+        return ['body' => $raw, 'error' => ''];
     }
 
     /**
