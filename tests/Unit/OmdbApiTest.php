@@ -574,6 +574,36 @@ final class OmdbApiTest extends TestCase
     }
 
     /**
+     * OMB-1: a 302 to a plaintext http:// target must never reach the wire.
+     * The request carries allow_redirects.max=0, so a cap-honoring
+     * generation refuses the first hop (error arm, null result) and only
+     * the original https URL was ever dialed.
+     */
+    public function test_async_redirect_to_http_never_goes_on_the_wire(): void
+    {
+        $api = new OmdbApi('key', true, 0);
+        $fake = OmdbFakeHttpClient::redirectingTo('http://evil.example/steal');
+        $this->injectClient($api, $fake);
+
+        $this->assertNull($api->getByImdbId('tt0111161'));
+        $this->assertSame(['max' => 0], $fake->lastOptions['allow_redirects']);
+        $this->assertCount(1, $fake->wireUrls);
+        $this->assertStringStartsWith('https://www.omdbapi.com/', $fake->wireUrls[0]);
+    }
+
+    /**
+     * OMB-1 backstop: a generation that ignores allow_redirects and hands
+     * back the 3xx must still resolve to null, not be decoded as an envelope.
+     */
+    public function test_async_3xx_response_is_refused_when_generation_ignores_cap(): void
+    {
+        $api = new OmdbApi('key', true, 0);
+        $this->injectClient($api, OmdbFakeHttpClient::redirectingTo('http://evil.example/', 302, false));
+
+        $this->assertNull($api->getByImdbId('tt0111161'));
+    }
+
+    /**
      * Both arms must still hand a live Client to the caller — the options
      * above are consumed at construction, so this keeps the wiring honest
      * end-to-end for each verification posture.

@@ -464,7 +464,23 @@ final class OmdbApi
         $client = $this->getHttpClient();
 
         $client->request($url, [
+            // Redirect kill-out: the key-bearing request must never be
+            // re-dispatched to a Location target (an http:// downgrade or a
+            // foreign host would leak the apikey). max=0 makes the vendored
+            // client's guardMax() refuse the first hop through the error
+            // arm; the 3xx guard below backstops any generation that does
+            // not honor the key (same posture as the cURL seam's
+            // FOLLOWLOCATION=false).
+            'allow_redirects' => ['max' => 0],
             'success' => function (Response $response) use (&$state): void {
+                $status = $response->getStatusCode();
+                if ($status >= 300 && $status < 400) {
+                    $state['error'] = new \RuntimeException('OMDb redirect refused (HTTP ' . $status . ')');
+                    $state['done'] = true;
+
+                    return;
+                }
+
                 $body = $response->getBody();
                 $contents = $body->getContents();
                 if ($contents !== '') {
