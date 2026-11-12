@@ -944,6 +944,10 @@ final class OmdbPluginTest extends TestCase
             'file:///etc/passwd',
             ' //example.com/poster.jpg',
             'https:/example.com/poster.jpg',
+            // allowlisted host, so each row is rejected by the scheme law alone
+            'http://m.media-amazon.com/images/M/x.jpg',
+            'HTTPS://m.media-amazon.com/images/M/x.jpg',
+            'Https://m.media-amazon.com/images/M/x.jpg',
         ];
         foreach ($bad as $poster) {
             $details = ['Response' => 'True', 'Title' => 'Inception', 'Poster' => $poster];
@@ -990,6 +994,9 @@ final class OmdbPluginTest extends TestCase
             'https://m.media-amazon.com#@evil.example/x.jpg',
             'https://M.MEDIA-AMAZON.COM/images/M/x.jpg',
             'https://m.media-amazon.com./images/M/x.jpg',
+            // malformed DNS labels (empty label, hyphen-edged label)
+            'https://m..media-amazon.com/x.jpg',
+            'https://a-.media-amazon.com/x.jpg',
         ];
         foreach ($bad as $poster) {
             $details = ['Response' => 'True', 'Title' => 'Inception', 'Poster' => $poster];

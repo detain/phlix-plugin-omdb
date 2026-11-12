@@ -415,9 +415,10 @@ final class OmdbPlugin implements ConfigurableInterface, LifecycleInterface, Met
      *  - scheme: lowercase `https://` only — 'http://' (key-adjacent
      *    traffic downgrade), 'javascript:', 'file:', uppercase variants and
      *    every other shape are rejected (fail-closed against casing tricks);
-     *  - authority: a bare lowercase DNS hostname and nothing else — no
-     *    userinfo ('user:pass@', 'cdn@evil'), no port, no IP literal, no
-     *    trailing dot, and it must be followed by a '/' path, so '?', '#'
+     *  - authority: a bare lowercase DNS hostname and nothing else — every
+     *    dot-separated label non-empty and alphanumeric-edged (no '..', no
+     *    leading/trailing '-' in a label), no userinfo ('user:pass@',
+     *    'cdn@evil'), no port, no IP literal, no trailing dot, and it must be followed by a '/' path, so '?', '#'
      *    and '\' can never re-split the authority in a lenient URL parser;
      *  - host: one of {@see POSTER_HOST_SUFFIXES} or a dot-bounded
      *    subdomain of one;
@@ -439,7 +440,8 @@ final class OmdbPlugin implements ConfigurableInterface, LifecycleInterface, Met
     {
         $value = self::textField($details, 'Poster');
 
-        $shape = '~^https://([a-z0-9](?:[a-z0-9.-]*[a-z0-9])?)/[^\x00-\x20\x7f\\\\]*$~D';
+        $label = '[a-z0-9](?:[a-z0-9-]*[a-z0-9])?';
+        $shape = '~^https://((?:' . $label . '\.)*' . $label . ')/[^\x00-\x20\x7f\\\\]*$~D';
         if (preg_match($shape, $value, $m) !== 1) {
             return '';
         }
