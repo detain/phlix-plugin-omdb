@@ -749,7 +749,7 @@ final class OmdbPluginTest extends TestCase
     public function test_onEnable_does_not_overwrite_existing_logger(): void
     {
         $customLogger = new class extends \Psr\Log\AbstractLogger {
-            public function log($level, string|\Stringable $message, array $context = []): void {}
+            public function log($level, $message, array $context = []): void {}
         };
 
         $plugin = new OmdbPlugin(new OmdbSettings(enabled: true, apiKey: 'key'), $customLogger);
@@ -1045,5 +1045,61 @@ final class OmdbPluginTest extends TestCase
 
         $this->assertSame([], $logger->records);
         $this->assertSame(3600, $plugin->getSettings()->cacheTtlSeconds);
+    }
+
+    // -------------------------------------------------------------------------
+    // [OMB-4] TLS-verification opt-out is surfaced as a warning.
+    // -------------------------------------------------------------------------
+
+    /**
+     * Consequence: building the transport with TLS verification off logs
+     * exactly one warning through the injected logger — fixed text, no
+     * context, no setting key name and no credential material.
+     */
+    public function test_ensure_api_warns_once_when_tls_verification_disabled(): void
+    {
+        $logger = new class extends \Psr\Log\AbstractLogger {
+            /** @var list<array{mixed, string, array<array-key, mixed>}> */
+            public array $records = [];
+
+            public function log($level, $message, array $context = []): void
+            {
+                $this->records[] = [$level, (string) $message, $context];
+            }
+        };
+        $plugin = new OmdbPlugin(
+            new OmdbSettings(enabled: true, apiKey: 'tls_secret_key', useSslVerification: false),
+            $logger,
+        );
+
+        $method = new \ReflectionMethod(OmdbPlugin::class, 'ensureApi');
+        $first = $method->invoke($plugin);
+        $second = $method->invoke($plugin);
+
+        $this->assertInstanceOf(OmdbApi::class, $first);
+        $this->assertSame($first, $second);
+        $this->assertSame([[
+            \Psr\Log\LogLevel::WARNING,
+            'OMDb TLS certificate verification is disabled: '
+                . 'outbound requests and their credentials can be intercepted in transit',
+            [],
+        ]], $logger->records);
+        $this->assertSame(OmdbPlugin::TLS_VERIFICATION_DISABLED_WARNING, $logger->records[0][1]);
+        $this->assertStringNotContainsString('tls_secret_key', serialize($logger->records));
+        $this->assertStringNotContainsString('api_key', serialize($logger->records));
+        $this->assertStringNotContainsString('use_ssl_verification', serialize($logger->records));
+    }
+
+    /**
+     * Consequence: the default (verification on) posture logs nothing.
+     */
+    public function test_ensure_api_does_not_warn_when_tls_verification_enabled(): void
+    {
+        $logger = new OmdbCapturingLogger();
+        $plugin = new OmdbPlugin(new OmdbSettings(enabled: true, apiKey: 'k'), $logger);
+
+        $method = new \ReflectionMethod(OmdbPlugin::class, 'ensureApi');
+        $this->assertInstanceOf(OmdbApi::class, $method->invoke($plugin));
+        $this->assertSame([], $logger->records);
     }
 }

@@ -57,6 +57,14 @@ final class OmdbPlugin implements ConfigurableInterface, LifecycleInterface, Met
     public const SOURCE_NAME = 'omdb';
 
     /**
+     * Warning logged when a transport is built with TLS certificate
+     * verification turned off. Deliberately free of setting key names and
+     * credential material.
+     */
+    public const TLS_VERIFICATION_DISABLED_WARNING = 'OMDb TLS certificate verification is disabled: '
+        . 'outbound requests and their credentials can be intercepted in transit';
+
+    /**
      * Whether {@see $api} was constructed by {@see ensureApi()} (true) or
      * injected by the caller through the constructor (false). configure()
      * discards only self-built transports — injected clients are the
@@ -168,6 +176,15 @@ final class OmdbPlugin implements ConfigurableInterface, LifecycleInterface, Met
         // checked directly; anything else is a string by declaration.
         if ($apiKey === null || $apiKey === '') {
             return null;
+        }
+
+        // [OMB-4] The TLS opt-out is an advanced escape hatch whose cost is
+        // the query-string credential travelling to any intercepting hop.
+        // Surface it once per transport build so an operator sees the
+        // posture in the logs. The text names no setting key and carries no
+        // context — nothing secret-adjacent reaches the sink.
+        if ($settings->useSslVerification === false) {
+            $this->logger?->warning(self::TLS_VERIFICATION_DISABLED_WARNING);
         }
 
         $this->api = new OmdbApi(
