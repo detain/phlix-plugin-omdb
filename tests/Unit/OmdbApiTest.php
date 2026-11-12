@@ -1938,7 +1938,7 @@ final class OmdbApiTest extends TestCase
 
         $this->assertCount(1, $logger->records);
         [$message, $context] = $logger->records[0];
-        $this->assertSame('OMDb request timed out: no transport callback before the poll backstop', $message);
+        $this->assertSame('OMDb request timed out: the HTTP transport never responded, so the lookup returned no result; check outbound network access to omdbapi.com', $message);
         $this->assertStringNotContainsString(self::CANARY_KEY, serialize($context));
         $this->assertStringContainsString('apikey=' . OmdbApi::MASKED_APIKEY, (string) $context['url']);
     }

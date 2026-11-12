@@ -1292,7 +1292,7 @@ final class OmdbPluginTest extends TestCase
 
         $this->assertCount(1, $logger->records);
         [$message, $context] = $logger->records[0];
-        $this->assertSame('OMDb settings discarded mistyped values (defaults applied)', $message);
+        $this->assertSame('OMDb ignored settings with the wrong value type and used the defaults instead; correct these settings in the OMDb plugin configuration', $message);
         $this->assertSame(['cache_ttl_seconds'], $context['keys']);
         $this->assertStringNotContainsString('not-a-number', serialize($context));
     }

@@ -118,7 +118,8 @@ final class OmdbPlugin implements ConfigurableInterface, LifecycleInterface, Met
         // is named here. Only key NAMES are logged — a mistyped api_key value
         // is still a secret, whatever shape it arrived in.
         if ($this->settings->rejectedKeys !== []) {
-            $this->logger?->warning('OMDb settings discarded mistyped values (defaults applied)', [
+            $this->logger?->warning('OMDb ignored settings with the wrong value type and used the defaults instead; '
+                . 'correct these settings in the OMDb plugin configuration', [
                 'keys' => $this->settings->rejectedKeys,
             ]);
         }

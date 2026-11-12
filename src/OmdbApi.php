@@ -561,7 +561,9 @@ final class OmdbApi
         // output. A stalled transport must announce itself like every other
         // one does — URL redacted at the sink, same as the error arm below.
         if ($state['done'] === false) {
-            $this->logger?->warning('OMDb request timed out: no transport callback before the poll backstop', [
+            $this->logger?->warning('OMDb request timed out: the HTTP transport never responded, '
+                . 'so the lookup returned no result; '
+                . 'check outbound network access to omdbapi.com', [
                 'url' => $this->redactSecrets($url),
                 'backstop_sec' => self::HTTP_TIMEOUT_SEC + 1,
             ]);
