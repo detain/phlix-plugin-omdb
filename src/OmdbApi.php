@@ -848,7 +848,9 @@ final class OmdbApi
             return false;
         }
 
-        return Worker::$eventLoopClass === self::SWOOLE_EVENT_LOOP_CLASS;
+        // A leading backslash (`\Workerman\Events\Swoole`) names the same
+        // class; normalise it so detection cannot be silently bypassed.
+        return ltrim((string) Worker::$eventLoopClass, '\\') === self::SWOOLE_EVENT_LOOP_CLASS;
     }
 
     /**

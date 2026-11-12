@@ -1785,6 +1785,38 @@ final class OmdbApiTest extends TestCase
     }
 
     /**
+     * [PG-194] A leading-backslash FQCN names the same Swoole adapter and must
+     * still take the blocking transport (OMB-5).
+     */
+    public function test_leading_backslash_swoole_loop_class_still_reroutes_to_curl(): void
+    {
+        $api = new OmdbApi('key', true, 0);
+        $client = OmdbFakeHttpClient::withBody('{}');
+        $this->injectClient($api, $client);
+
+        $seam = new \ReflectionProperty(OmdbApi::class, 'curlTransport');
+        $seam->setAccessible(true);
+        $curlUrl = null;
+        $seam->setValue($api, static function (string $url) use (&$curlUrl): array {
+            $curlUrl = $url;
+
+            return ['body' => '{"Response":"True","Title":"Inception"}', 'error' => ''];
+        });
+
+        $original = \Workerman\Worker::$eventLoopClass;
+        \Workerman\Worker::$eventLoopClass = '\\Workerman\\Events\\Swoole';
+        try {
+            $result = $api->getByImdbId('tt1375666');
+        } finally {
+            \Workerman\Worker::$eventLoopClass = $original;
+        }
+
+        $this->assertIsArray($result);
+        $this->assertNotNull($curlUrl, 'leading-backslash class must still reroute');
+        $this->assertNull($client->lastUrl);
+    }
+
+    /**
      * [PG-194] The reroute is loop-conditional: without the Swoole adapter in
      * force the async client path is unchanged, and the curl seam must never
      * run (tests would reach the network otherwise).
