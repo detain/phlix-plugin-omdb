@@ -147,8 +147,23 @@ final class OmdbPluginTest extends TestCase
 
         $plugin->onEnable($this->makeContainer());
 
-        // Reached only if onEnable did not throw.
-        $this->assertInstanceOf(OmdbSettings::class, $plugin->getSettings());
+        // [OMB-15] Reaching this line proves no throw; the observable
+        // contract is that no transport was wired without a key.
+        $this->assertNull($this->apiOf($plugin), 'onEnable must not wire a transport without an API key');
+    }
+
+    /**
+     * Consequence: with a key configured, onEnable runs the wire step and
+     * the plugin holds a self-built transport afterwards.
+     */
+    public function test_onEnable_wires_the_transport_when_api_key_present(): void
+    {
+        $plugin = new OmdbPlugin(new OmdbSettings(enabled: true, apiKey: 'key'));
+        $this->assertNull($this->apiOf($plugin));
+
+        $plugin->onEnable($this->makeContainer());
+
+        $this->assertInstanceOf(OmdbApi::class, $this->apiOf($plugin));
     }
 
     /**
@@ -441,29 +456,36 @@ final class OmdbPluginTest extends TestCase
     // -------------------------------------------------------------------------
 
     /**
-     * Consequence: onDisable() calls clearCache() on the API client.
+     * Consequence: onDisable() empties the API client's response cache.
+     *
+     * [OMB-15] Populated-then-empty: a cached read is proven first (second
+     * read served without a fetch, one cache entry held), then onDisable
+     * must leave the cache empty and the next read must refetch.
      */
     public function test_onDisable_clears_api_cache(): void
     {
-        $cacheCleared = false;
-        $api = new OmdbApi('key', true, 3600, null, static function (string $url): ?array {
+        $fetches = 0;
+        $api = new OmdbApi('key', true, 3600, null, static function (string $url) use (&$fetches): ?array {
+            $fetches++;
+
             return ['Response' => 'True', 'Title' => 'Inception', 'imdbRating' => '8.8'];
         });
-
-        // Use reflection to mock clearCache behavior
+        (new \ReflectionProperty(OmdbApi::class, 'timerSleep'))
+            ->setValue($api, static function (float $seconds): void {
+            });
+        $cache = new \ReflectionProperty(OmdbApi::class, 'cache');
         $plugin = new OmdbPlugin(new OmdbSettings(enabled: true, apiKey: 'key'), null, $api);
 
-        // Manually set api to simulate after onEnable has been called
-        $reflection = new \ReflectionClass(OmdbPlugin::class);
-        $apiProperty = $reflection->getProperty('api');
-        $apiProperty->setAccessible(true);
-        $apiProperty->setValue($plugin, $api);
+        $this->assertSame('Inception', $plugin->getDetails('tt1375666')['title']);
+        $this->assertSame('Inception', $plugin->getDetails('tt1375666')['title']);
+        $this->assertSame(1, $fetches, 'second read must be a cache hit');
+        $this->assertCount(1, $cache->getValue($api), 'cache must be populated before onDisable');
 
-        // onDisable should clear cache (we verify by checking it doesn't throw)
         $plugin->onDisable();
 
-        // If we got here without exception, the test passes
-        $this->assertTrue(true, 'onDisable should not throw');
+        $this->assertSame([], $cache->getValue($api), 'onDisable must empty the response cache');
+        $this->assertSame('Inception', $plugin->getDetails('tt1375666')['title']);
+        $this->assertSame(2, $fetches, 'first read after onDisable must refetch');
     }
 
     // -------------------------------------------------------------------------
@@ -475,13 +497,21 @@ final class OmdbPluginTest extends TestCase
      */
     public function test_onEnable_resolves_logger_from_container(): void
     {
-        $container = $this->makeContainer();
-        $plugin = new OmdbPlugin();
+        $logger = new OmdbCapturingLogger();
+        $plugin = new OmdbPlugin(
+            new OmdbSettings(enabled: true, apiKey: 'key', useSslVerification: false),
+        );
 
-        $plugin->onEnable($container);
+        $plugin->onEnable($this->makeContainer($logger));
 
-        // Verify plugin still works (logger was resolved but using NullLogger as fallback is valid)
-        $this->assertInstanceOf(OmdbSettings::class, $plugin->getSettings());
+        // [OMB-15] The container's logger is the one the plugin now holds,
+        // and onEnable's own wire step already logs through it.
+        $this->assertSame($logger, (new \ReflectionProperty(OmdbPlugin::class, 'logger'))->getValue($plugin));
+        $this->assertSame(
+            [[OmdbPlugin::TLS_VERIFICATION_DISABLED_WARNING, []]],
+            $logger->records,
+            'the TLS opt-out warning must reach the container-resolved logger',
+        );
     }
 
     /**
@@ -490,8 +520,13 @@ final class OmdbPluginTest extends TestCase
     public function test_onEnable_handles_missing_logger(): void
     {
         $container = new class implements ContainerInterface {
+            /** @var list<string> */
+            public array $requested = [];
+
             public function get(string $id): mixed
             {
+                $this->requested[] = $id;
+
                 throw new class ('not found') extends \RuntimeException implements NotFoundExceptionInterface {
                 };
             }
@@ -501,12 +536,45 @@ final class OmdbPluginTest extends TestCase
                 return false;
             }
         };
-        $plugin = new OmdbPlugin();
+        $plugin = new OmdbPlugin(new OmdbSettings(enabled: true, apiKey: 'key'));
 
-        // Should not throw
         $plugin->onEnable($container);
 
-        $this->assertInstanceOf(OmdbSettings::class, $plugin->getSettings());
+        // [OMB-15] The lookup was attempted, its failure was swallowed into
+        // a NullLogger, and the wire step still ran.
+        $this->assertSame([LoggerInterface::class], $container->requested);
+        $this->assertInstanceOf(
+            NullLogger::class,
+            (new \ReflectionProperty(OmdbPlugin::class, 'logger'))->getValue($plugin),
+        );
+        $this->assertInstanceOf(OmdbApi::class, $this->apiOf($plugin));
+    }
+
+    /**
+     * Consequence: a container entry that is not a PSR-3 logger is not
+     * adopted; the plugin falls back to a NullLogger.
+     */
+    public function test_onEnable_rejects_a_non_logger_container_entry(): void
+    {
+        $container = new class implements ContainerInterface {
+            public function get(string $id): mixed
+            {
+                return new \stdClass();
+            }
+
+            public function has(string $id): bool
+            {
+                return true;
+            }
+        };
+        $plugin = new OmdbPlugin();
+
+        $plugin->onEnable($container);
+
+        $this->assertInstanceOf(
+            NullLogger::class,
+            (new \ReflectionProperty(OmdbPlugin::class, 'logger'))->getValue($plugin),
+        );
     }
 
     /**
@@ -559,13 +627,32 @@ final class OmdbPluginTest extends TestCase
         return new OmdbPlugin(new OmdbSettings(enabled: true, apiKey: 'key'), null, $api);
     }
 
-    private function makeContainer(): ContainerInterface
+    /**
+     * The plugin's current transport (null until wired).
+     */
+    private function apiOf(OmdbPlugin $plugin): ?OmdbApi
     {
-        return new class implements ContainerInterface {
+        $api = (new \ReflectionProperty(OmdbPlugin::class, 'api'))->getValue($plugin);
+        $this->assertTrue($api === null || $api instanceof OmdbApi);
+
+        return $api;
+    }
+
+    /**
+     * Fake host container serving LoggerInterface (a NullLogger unless the
+     * caller supplies one, e.g. an OmdbCapturingLogger).
+     */
+    private function makeContainer(?LoggerInterface $logger = null): ContainerInterface
+    {
+        return new class ($logger ?? new NullLogger()) implements ContainerInterface {
+            public function __construct(private readonly LoggerInterface $logger)
+            {
+            }
+
             public function get(string $id): mixed
             {
                 if ($id === LoggerInterface::class) {
-                    return new NullLogger();
+                    return $this->logger;
                 }
 
                 throw new class ('not found') extends \RuntimeException implements NotFoundExceptionInterface {
@@ -737,10 +824,11 @@ final class OmdbPluginTest extends TestCase
     {
         $plugin = new OmdbPlugin(new OmdbSettings(enabled: true, apiKey: 'key'));
 
-        // onDisable should not throw even though api was never created
+        // onDisable must not throw even though api was never created, and
+        // must not build a transport just to clear it.
         $plugin->onDisable();
 
-        $this->assertTrue(true);
+        $this->assertNull($this->apiOf($plugin));
     }
 
     /**
@@ -754,13 +842,10 @@ final class OmdbPluginTest extends TestCase
 
         $plugin = new OmdbPlugin(new OmdbSettings(enabled: true, apiKey: 'key'), $customLogger);
 
-        // Use reflection to check the logger before onEnable
-        $reflection = new \ReflectionClass($plugin);
-        $loggerProperty = $reflection->getProperty('logger');
-        $loggerProperty->setAccessible(true);
-        $loggerBefore = $loggerProperty->getValue($plugin);
+        $loggerProperty = new \ReflectionProperty(OmdbPlugin::class, 'logger');
+        $this->assertSame($customLogger, $loggerProperty->getValue($plugin));
 
-        $plugin->onEnable($this->makeContainer());
+        $plugin->onEnable($this->makeContainer(new OmdbCapturingLogger()));
 
         $loggerAfter = $loggerProperty->getValue($plugin);
 
