@@ -394,13 +394,21 @@ final class OmdbPlugin implements ConfigurableInterface, LifecycleInterface, Met
      * maps to '' so the host resolver never persists 'N/A' as data.
      * The getImages() Poster gate uses the same sentinel idiom.
      *
+     * [OMB-13] The sentinel match is trimmed and case-folded (' N/A',
+     * 'n/a', "N/A\n" all count), but it is whole-value equality only: a
+     * genuine string that merely contains 'n/a' ('Drama, N/A', 'N/A.')
+     * passes through byte-identical, untrimmed.
+     *
      * @param array<string, mixed> $details
      */
     private static function textField(array $details, string $key): string
     {
         $value = $details[$key] ?? '';
+        if (!is_string($value) || strcasecmp(trim($value), 'N/A') === 0) {
+            return '';
+        }
 
-        return (is_string($value) && $value !== 'N/A') ? $value : '';
+        return $value;
     }
 
     /**
@@ -418,7 +426,8 @@ final class OmdbPlugin implements ConfigurableInterface, LifecycleInterface, Met
      *  - authority: a bare lowercase DNS hostname and nothing else — every
      *    dot-separated label non-empty and alphanumeric-edged (no '..', no
      *    leading/trailing '-' in a label), no userinfo ('user:pass@',
-     *    'cdn@evil'), no port, no IP literal, no trailing dot, and it must be followed by a '/' path, so '?', '#'
+     *    'cdn@evil'), no port, no IP literal, no trailing dot, and it must be
+     *    followed by a '/' path, so '?', '#'
      *    and '\' can never re-split the authority in a lenient URL parser;
      *  - host: one of {@see POSTER_HOST_SUFFIXES} or a dot-bounded
      *    subdomain of one;

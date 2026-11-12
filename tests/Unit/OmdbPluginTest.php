@@ -880,6 +880,100 @@ final class OmdbPluginTest extends TestCase
         $this->assertSame('series', $result['type']);
     }
 
+    /**
+     * [OMB-13] Consequence: the 'N/A' sentinel is recognised after trim and
+     * case-fold — padded or re-cased variants from a proxy/cache layer must
+     * not leak into host persistence as literal data.
+     */
+    public function test_getDetails_maps_trimmed_and_case_folded_na_variants_to_empty_strings(): void
+    {
+        $variants = [
+            'Title' => ' N/A',
+            'Year' => 'N/A ',
+            'Rated' => 'n/a',
+            'Released' => 'N/a',
+            'Runtime' => "\tn/A\n",
+            'Genre' => " N/A\r\n",
+            'Director' => "\x00n/a\x0B",
+            'Writer' => 'n/A',
+            'Actors' => '  N/A  ',
+            'Plot' => "N/A\n",
+            'Language' => ' n/a ',
+            'Country' => 'N/A',
+            'Awards' => "\nN/A",
+            'Poster' => ' n/a ',
+            'Type' => 'N/A ',
+        ];
+        $details = ['Response' => 'True', 'imdbRating' => 'N/A', 'Ratings' => []] + $variants;
+
+        $result = $this->makeConfiguredPluginWithDetails($details)->getDetails('tt1375666');
+
+        $outKeys = [
+            'title', 'year', 'rated', 'released', 'runtime', 'genre', 'director',
+            'writer', 'actors', 'plot', 'language', 'country', 'awards', 'poster_url', 'type',
+        ];
+        $this->assertSame(array_fill_keys($outKeys, ''), array_intersect_key($result, array_fill_keys($outKeys, true)));
+    }
+
+    /**
+     * [OMB-13] Consequence: the sentinel gate is whole-value folded
+     * equality only — a genuine string that merely CONTAINS 'n/a' (or is
+     * padded around a longer value) passes through byte-identical,
+     * untrimmed, never dropped.
+     */
+    public function test_getDetails_keeps_genuine_strings_containing_na_substring(): void
+    {
+        $details = [
+            'Response' => 'True',
+            'Title' => 'N/A.',
+            'Year' => 'n/a 2010',
+            'Rated' => 'NA',
+            'Released' => 'N /A',
+            'Runtime' => ' 148 min ',
+            'Genre' => 'Drama, N/A',
+            'Director' => 'Christopher Nolan (n/a)',
+            'Writer' => 'N/AN/A',
+            'Actors' => 'Leonardo DiCaprio, n/a',
+            'Plot' => 'A thief whose n/a status is in question.',
+            'Language' => 'English',
+            'Country' => '/N/A',
+            'Awards' => 'N/A N/A',
+            'Type' => 'movie',
+            'imdbRating' => 'N/A',
+            'Ratings' => [],
+        ];
+
+        $result = $this->makeConfiguredPluginWithDetails($details)->getDetails('tt1375666');
+
+        $this->assertSame('N/A.', $result['title']);
+        $this->assertSame('n/a 2010', $result['year']);
+        $this->assertSame('NA', $result['rated']);
+        $this->assertSame('N /A', $result['released']);
+        $this->assertSame(' 148 min ', $result['runtime']);
+        $this->assertSame('Drama, N/A', $result['genre']);
+        $this->assertSame('Christopher Nolan (n/a)', $result['director']);
+        $this->assertSame('N/AN/A', $result['writer']);
+        $this->assertSame('Leonardo DiCaprio, n/a', $result['actors']);
+        $this->assertSame('A thief whose n/a status is in question.', $result['plot']);
+        $this->assertSame('English', $result['language']);
+        $this->assertSame('/N/A', $result['country']);
+        $this->assertSame('N/A N/A', $result['awards']);
+        $this->assertSame('movie', $result['type']);
+    }
+
+    /**
+     * [OMB-13] Consequence: getImages() shares the folded sentinel gate —
+     * a re-cased or padded 'N/A' Poster yields no image.
+     */
+    public function test_getImages_returns_empty_for_case_folded_na_poster(): void
+    {
+        foreach (['n/a', ' N/A ', "N/a\n"] as $poster) {
+            $details = ['Response' => 'True', 'Title' => 'Inception', 'Poster' => $poster];
+
+            $this->assertSame([], $this->makeConfiguredPluginWithDetails($details)->getImages('tt1375666'));
+        }
+    }
+
     // -------------------------------------------------------------------------
     // W-min75-omdb minors: configure() transport law, poster scheme gate
     // -------------------------------------------------------------------------
