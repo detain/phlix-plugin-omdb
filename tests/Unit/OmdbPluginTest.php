@@ -341,7 +341,7 @@ final class OmdbPluginTest extends TestCase
             'Language' => 'English, Japanese, French',
             'Country' => 'United States, United Kingdom',
             'Awards' => 'Won 4 Oscars. 157 wins & 220 nominations total.',
-            'Poster' => 'https://example.com/poster.jpg',
+            'Poster' => 'https://m.media-amazon.com/images/M/poster.jpg',
             'Type' => 'movie',
             'imdbRating' => '8.8',
             'Ratings' => [
@@ -375,7 +375,7 @@ final class OmdbPluginTest extends TestCase
         $details = [
             'Response' => 'True',
             'Title' => 'Inception',
-            'Poster' => 'https://example.com/inception.jpg',
+            'Poster' => 'https://m.media-amazon.com/images/M/inception.jpg',
         ];
         $plugin = $this->makeConfiguredPluginWithPoster($details);
 
@@ -383,7 +383,7 @@ final class OmdbPluginTest extends TestCase
 
         $this->assertArrayHasKey('poster', $result);
         $this->assertCount(1, $result['poster']);
-        $this->assertSame('https://example.com/inception.jpg', $result['poster'][0]['url']);
+        $this->assertSame('https://m.media-amazon.com/images/M/inception.jpg', $result['poster'][0]['url']);
     }
 
     /**
@@ -859,7 +859,7 @@ final class OmdbPluginTest extends TestCase
             'Language' => [],
             'Country' => [],
             'Awards' => 'Won 4 Oscars.',
-            'Poster' => ['https://example.com/poster.jpg'],
+            'Poster' => ['https://m.media-amazon.com/images/M/poster.jpg'],
             'Type' => 'series',
             'imdbRating' => 'N/A',
             'Ratings' => [],
@@ -953,6 +953,81 @@ final class OmdbPluginTest extends TestCase
 
             $images = $this->makeConfiguredPluginWithPoster($details)->getImages('tt1375666');
             $this->assertSame([], $images, 'non-https Poster must yield no images: ' . $poster);
+        }
+    }
+
+    /**
+     * [OMB-11] Poster host tightening: https alone is not enough. A body
+     * that is proxied, tampered or simply foreign can carry an https URL
+     * whose authority smuggles credentials (userinfo), an explicit port,
+     * or a host OMDb never serves art from — every such value flows into
+     * host persistence and a client image loader. Each row must map to ''
+     * in getDetails() and [] in getImages().
+     */
+    public function test_poster_userinfo_port_and_foreign_host_rows_are_dropped(): void
+    {
+        $bad = [
+            // userinfo smuggling (credential leak / host-confusion shapes)
+            'https://user:pass@m.media-amazon.com/images/M/x.jpg',
+            'https://m.media-amazon.com@evil.example/images/M/x.jpg',
+            'https://m.media-amazon.com:443@evil.example/x.jpg',
+            'https://m.media-amazon.com\\@evil.example/x.jpg',
+            'https://@m.media-amazon.com/images/M/x.jpg',
+            // explicit port (canonical OMDb art never carries one)
+            'https://m.media-amazon.com:8443/images/M/x.jpg',
+            'https://m.media-amazon.com:443/images/M/x.jpg',
+            // foreign hosts, including lookalike suffix/prefix tricks
+            'https://example.com/poster.jpg',
+            'https://evil.example/images/M/x.jpg',
+            'https://evilmedia-amazon.com/images/M/x.jpg',
+            'https://media-amazon.com.evil.example/images/M/x.jpg',
+            'https://m.media-amazon.com.evil.example/x.jpg',
+            'https://127.0.0.1/x.jpg',
+            'https://[::1]/x.jpg',
+            // authority/path delimiter shapes a lenient parser reads differently
+            'https://m.media-amazon.com\\images\\M\\x.jpg',
+            'https://m.media-amazon.com?u=https://evil.example/x.jpg',
+            'https://m.media-amazon.com#@evil.example/x.jpg',
+            'https://M.MEDIA-AMAZON.COM/images/M/x.jpg',
+            'https://m.media-amazon.com./images/M/x.jpg',
+        ];
+        foreach ($bad as $poster) {
+            $details = ['Response' => 'True', 'Title' => 'Inception', 'Poster' => $poster];
+
+            $result = $this->makeConfiguredPluginWithDetails($details)->getDetails('tt1375666');
+            $this->assertSame('', $result['poster_url'], 'untrusted Poster must map to empty string: ' . $poster);
+
+            $images = $this->makeConfiguredPluginWithPoster($details)->getImages('tt1375666');
+            $this->assertSame([], $images, 'untrusted Poster must yield no images: ' . $poster);
+        }
+    }
+
+    /**
+     * [OMB-11] Counterpart law: the allowlist must not reject legitimate
+     * art. Current OMDb posters live on m.media-amazon.com and carry '@@'
+     * inside the PATH (not the authority); historical bodies used the
+     * ssl-images-amazon.com and media-imdb.com CDNs. All pass verbatim.
+     */
+    public function test_poster_on_omdb_art_cdn_hosts_passes_verbatim(): void
+    {
+        $good = [
+            'https://m.media-amazon.com/images/M/MV5BMjAxMzY3NjcxNF5BMl5BanBnXkFtZTcwNTI5OTM0Mw@@._V1_SX300.jpg',
+            'https://images-na.ssl-images-amazon.com/images/M/MV5BMTM0MjUzNjkwMl5BMl5BanBnXkFtZTcw@@._V1_SX300.jpg',
+            'https://ia.media-imdb.com/images/M/MV5BMTM0MjUzNjkwMl5BMl5BanBnXkFtZTcwNjY0OTk1Mw@@._V1_SX300.jpg',
+            'https://media-amazon.com/images/M/x.jpg',
+        ];
+        foreach ($good as $poster) {
+            $details = ['Response' => 'True', 'Title' => 'Inception', 'Poster' => $poster];
+
+            $result = $this->makeConfiguredPluginWithDetails($details)->getDetails('tt1375666');
+            $this->assertSame($poster, $result['poster_url'], 'OMDb CDN Poster must pass verbatim: ' . $poster);
+
+            $images = $this->makeConfiguredPluginWithPoster($details)->getImages('tt1375666');
+            $this->assertSame(
+                ['poster' => [['url' => $poster]]],
+                $images,
+                'OMDb CDN Poster must yield the image: ' . $poster
+            );
         }
     }
 

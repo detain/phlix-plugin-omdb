@@ -65,6 +65,23 @@ final class OmdbPlugin implements ConfigurableInterface, LifecycleInterface, Met
         . 'outbound requests and their credentials can be intercepted in transit';
 
     /**
+     * [OMB-11] Registrable domains OMDb serves poster art from. A Poster
+     * host must equal one of these or be a subdomain of one (dot-bounded,
+     * so 'evilmedia-amazon.com' never matches). m.media-amazon.com is the
+     * current CDN; images-na.ssl-images-amazon.com and ia.media-imdb.com
+     * are the historical ones still present in long-lived cached bodies.
+     * Should OMDb move its art elsewhere the failure mode is "no poster"
+     * (identical to 'N/A'), never a foreign URL — extend this list then.
+     *
+     * @var list<non-empty-string>
+     */
+    private const POSTER_HOST_SUFFIXES = [
+        'media-amazon.com',
+        'ssl-images-amazon.com',
+        'media-imdb.com',
+    ];
+
+    /**
      * Whether {@see $api} was constructed by {@see ensureApi()} (true) or
      * injected by the caller through the constructor (false). configure()
      * discards only self-built transports — injected clients are the
@@ -344,7 +361,8 @@ final class OmdbPlugin implements ConfigurableInterface, LifecycleInterface, Met
         // Every OMDb text field goes through textField(): the API encodes
         // "no value" as the literal string 'N/A', and a proxied/foreign body
         // can carry any JSON shape — both collapse to ''. The Poster member
-        // goes through posterUrl(), which additionally requires https.
+        // goes through posterUrl(), which additionally requires an https
+        // URL on an OMDb art CDN host (no userinfo, no port).
         return [
             'source'    => self::SOURCE_NAME,
             'imdb_id'   => $externalId,
@@ -388,15 +406,32 @@ final class OmdbPlugin implements ConfigurableInterface, LifecycleInterface, Met
     /**
      * Sanitize a Poster URL for emission.
      *
-     * Real OMDb serves art only over HTTPS (https://m.media-amazon.com/...),
-     * and the value flows onward to host persistence and eventually a
-     * browser/TV image loader. The textField() sentinel gate plus a strict
-     * lowercase `https://` prefix are required: a proxied or hostile body
-     * can carry 'http://' (key-adjacent traffic downgrade), 'javascript:'
-     * (script URL sinks), 'file:' or any other shape, and those must map to
-     * '' exactly like 'N/A' does. Uppercase scheme variants are rejected
-     * too — canonical OMDb values are lowercase, and fail-closed keeps a
-     * casing trick out of the emitter.
+     * Real OMDb serves art only over HTTPS from the Amazon/IMDb image CDN
+     * (https://m.media-amazon.com/images/M/...@@._V1_SX300.jpg), and the
+     * value flows onward to host persistence and eventually a browser/TV
+     * image loader. The textField() sentinel gate plus a strict shape are
+     * required; anything else maps to '' exactly like 'N/A' does:
+     *
+     *  - scheme: lowercase `https://` only — 'http://' (key-adjacent
+     *    traffic downgrade), 'javascript:', 'file:', uppercase variants and
+     *    every other shape are rejected (fail-closed against casing tricks);
+     *  - authority: a bare lowercase DNS hostname and nothing else — no
+     *    userinfo ('user:pass@', 'cdn@evil'), no port, no IP literal, no
+     *    trailing dot, and it must be followed by a '/' path, so '?', '#'
+     *    and '\' can never re-split the authority in a lenient URL parser;
+     *  - host: one of {@see POSTER_HOST_SUFFIXES} or a dot-bounded
+     *    subdomain of one;
+     *  - path: no whitespace, control bytes or backslashes ('@' is allowed
+     *    here because canonical poster paths carry '@@').
+     *
+     * [OMB-11] Adjudication — host allowlist over a "host must validate"
+     * comment: both are fail-closed, but only the allowlist keeps the
+     * decision with the one component that knows where OMDb art lives.
+     * The host resolver persists provider URLs generically and has no
+     * per-provider host knowledge, so a comment would hand it a rule it
+     * cannot enforce. The cost (a future OMDb CDN move drops posters to ''
+     * until the suffix list is extended) is a missing image, never a
+     * foreign one.
      *
      * @param array<string, mixed> $details
      */
@@ -404,7 +439,19 @@ final class OmdbPlugin implements ConfigurableInterface, LifecycleInterface, Met
     {
         $value = self::textField($details, 'Poster');
 
-        return (preg_match('/^https:\/\/\S+$/', $value) === 1) ? $value : '';
+        $shape = '~^https://([a-z0-9](?:[a-z0-9.-]*[a-z0-9])?)/[^\x00-\x20\x7f\\\\]*$~D';
+        if (preg_match($shape, $value, $m) !== 1) {
+            return '';
+        }
+
+        $host = $m[1];
+        foreach (self::POSTER_HOST_SUFFIXES as $suffix) {
+            if ($host === $suffix || str_ends_with($host, '.' . $suffix)) {
+                return $value;
+            }
+        }
+
+        return '';
     }
 
     /**
@@ -431,8 +478,9 @@ final class OmdbPlugin implements ConfigurableInterface, LifecycleInterface, Met
             return [];
         }
 
-        // [M-OMDB-07 minor] Same gate as getDetails(): only a strict https
-        // Poster yields an image; sentinel/junk/scheme-shapeshifters -> [].
+        // [M-OMDB-07 minor] [OMB-11] Same gate as getDetails(): only a
+        // strict https Poster on an OMDb art CDN host yields an image;
+        // sentinel/junk/scheme-shapeshifters/userinfo/port/foreign -> [].
         $poster = self::posterUrl($details);
         if ($poster === '') {
             return [];
