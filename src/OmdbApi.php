@@ -58,6 +58,14 @@ final class OmdbApi
     private const HTTP_TIMEOUT_SEC = 10;
 
     /**
+     * [OMB-12] Hard cap on a response body, both transports. A real OMDb
+     * envelope is a few KB (a full-plot title ~2 KB); 4 MiB is generous
+     * headroom while still bounding what a hostile/misbehaving upstream or
+     * proxy can make the worker buffer and json_decode.
+     */
+    private const MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
+
+    /**
      * Class name the Swoole event adapter carries in
      * {@see \Workerman\Worker}::$eventLoopClass when the host runs
      * `Worker::$eventLoopClass = Workerman\Events\Swoole` (set in production
@@ -493,8 +501,24 @@ final class OmdbApi
                     return;
                 }
 
+                // [OMB-12] Refuse an oversize body: declared length first
+                // (before buffering), then the actual length as a backstop.
+                $declared = $response->getHeaderLine('Content-Length');
+                if ($declared !== '' && ctype_digit($declared) && (int) $declared > self::MAX_RESPONSE_BYTES) {
+                    $state['error'] = new \RuntimeException('OMDb response exceeds size cap');
+                    $state['done'] = true;
+
+                    return;
+                }
+
                 $body = $response->getBody();
                 $contents = $body->getContents();
+                if (strlen($contents) > self::MAX_RESPONSE_BYTES) {
+                    $state['error'] = new \RuntimeException('OMDb response exceeds size cap');
+                    $state['done'] = true;
+
+                    return;
+                }
                 if ($contents !== '') {
                     try {
                         /** @var mixed $decoded */
@@ -875,6 +899,15 @@ final class OmdbApi
             return null;
         }
 
+        if (strlen($result['body']) > self::MAX_RESPONSE_BYTES) {
+            $this->logger?->warning('OMDb HTTP error', [
+                'url' => $this->redactSecrets($url),
+                'error' => 'OMDb response exceeds size cap',
+            ]);
+
+            return null;
+        }
+
         if ($result['body'] === '') {
             // Same shape the async arm produces for an empty body: null.
             return null;
@@ -924,8 +957,24 @@ final class OmdbApi
             return ['body' => '', 'error' => 'cURL init failed'];
         }
 
+        // [OMB-12] Bound the download without buffering past the cap: the
+        // progress callback aborts on a declared/received total over the cap
+        // (header check), and the write callback aborts mid-stream.
+        $buffer = '';
+        $cap = self::MAX_RESPONSE_BYTES;
         curl_setopt_array($handle, [
-            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_NOPROGRESS => false,
+            CURLOPT_XFERINFOFUNCTION => static function ($h, int $dlTotal, int $dlNow) use ($cap): int {
+                return ($dlTotal > $cap || $dlNow > $cap) ? 1 : 0;
+            },
+            CURLOPT_WRITEFUNCTION => static function ($h, string $chunk) use (&$buffer, $cap): int {
+                if (strlen($buffer) + strlen($chunk) > $cap) {
+                    return 0; // short write aborts the transfer
+                }
+                $buffer .= $chunk;
+
+                return strlen($chunk);
+            },
             CURLOPT_TIMEOUT => self::HTTP_TIMEOUT_SEC,
             CURLOPT_CONNECTTIMEOUT => self::HTTP_TIMEOUT_SEC,
             CURLOPT_FOLLOWLOCATION => false,
@@ -940,14 +989,16 @@ final class OmdbApi
         $error = curl_error($handle);
         curl_close($handle);
 
-        if ($errno !== 0 || is_string($raw) === false) {
+        if ($errno !== 0 || $raw === false) {
             return [
                 'body' => '',
-                'error' => $error !== '' ? $error : 'cURL transport error (errno ' . $errno . ')',
+                'error' => $errno === CURLE_WRITE_ERROR || $errno === CURLE_ABORTED_BY_CALLBACK
+                    ? 'OMDb response exceeds size cap'
+                    : ($error !== '' ? $error : 'cURL transport error (errno ' . $errno . ')'),
             ];
         }
 
-        return ['body' => $raw, 'error' => ''];
+        return ['body' => $buffer, 'error' => ''];
     }
 
     /**

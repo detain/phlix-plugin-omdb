@@ -1112,6 +1112,60 @@ final class OmdbApiTest extends TestCase
     }
 
     /**
+     * [OMB-12] An oversize async body is refused through the error sink and
+     * never decoded or admitted.
+     */
+    public function test_oversize_async_body_is_refused(): void
+    {
+        $logger = new OmdbCapturingLogger();
+        $api = new OmdbApi('key', true, 0, $logger);
+        $big = '{"Response":"True","Title":"' . str_repeat('A', 4 * 1024 * 1024 + 1) . '"}';
+        $this->injectClient($api, OmdbFakeHttpClient::withBody($big));
+
+        $this->assertNull($api->getByImdbId('tt1375666'));
+        $this->assertSame('OMDb HTTP error', $logger->records[0][0]);
+    }
+
+    /**
+     * [OMB-12] A realistic multi-KB envelope is far below the cap.
+     */
+    public function test_realistic_large_async_body_still_admitted(): void
+    {
+        $body = json_encode(['Response' => 'True', 'Title' => 'Inception', 'Plot' => str_repeat('p', 200000)]);
+        $this->assertIsString($body);
+        $api = new OmdbApi('key', true, 0);
+        $this->injectClient($api, OmdbFakeHttpClient::withBody($body));
+
+        $this->assertIsArray($api->getByImdbId('tt1375666'));
+    }
+
+    /**
+     * [OMB-12] The cURL arm applies the same cap to the transport result.
+     */
+    public function test_oversize_curl_body_is_refused(): void
+    {
+        $logger = new OmdbCapturingLogger();
+        $api = new OmdbApi('key', true, 0, $logger);
+        $this->injectClient($api, new OmdbFakeHttpClient());
+        $seam = new \ReflectionProperty(OmdbApi::class, 'curlTransport');
+        $seam->setValue($api, static fn(string $url): array => [
+            'body' => '{"Response":"True","Title":"' . str_repeat('A', 4 * 1024 * 1024 + 1) . '"}',
+            'error' => '',
+        ]);
+
+        $original = \Workerman\Worker::$eventLoopClass;
+        \Workerman\Worker::$eventLoopClass = 'Workerman\\Events\\Swoole';
+        try {
+            $result = $api->getByImdbId('tt1375666');
+        } finally {
+            \Workerman\Worker::$eventLoopClass = $original;
+        }
+
+        $this->assertNull($result);
+        $this->assertSame('OMDb HTTP error', $logger->records[0][0]);
+    }
+
+    /**
      * Drive the real-HTTP transport with a preconfigured fake client.
      */
     private function injectClient(OmdbApi $api, OmdbFakeHttpClient $client): void
