@@ -20,16 +20,22 @@ declare(strict_types=1);
  * therefore already autoloaded from vendor/ and the stub branches below
  * never fire; inside an installed plugin (`var/plugins/phlix-plugin-omdb/`)
  * they may additionally be resolved by the host application's autoloader.
- * The dev-stubs exist only as a vestigial belt for exotic classpath states
- * (phlix-shared genuinely absent) and mirror the canonical SIGNATURES.
+ * The dev-stubs exist only as a belt for exotic classpath states
+ * (phlix-shared genuinely absent): one stub per shared contract the plugin
+ * implements — all three, each behind its own interface_exists() guard —
+ * mirroring the canonical SIGNATURES, so the suite runs green either way.
  */
 
-require __DIR__.'/../vendor/autoload.php';
+require __DIR__ . '/../vendor/autoload.php';
 
 if (!interface_exists(\Phlix\Shared\Plugin\LifecycleInterface::class)) {
-    require __DIR__.'/../dev-stubs/LifecycleInterface.php';
+    require __DIR__ . '/../dev-stubs/LifecycleInterface.php';
+}
+
+if (!interface_exists(\Phlix\Shared\Plugin\ConfigurableInterface::class)) {
+    require __DIR__ . '/../dev-stubs/ConfigurableInterface.php';
 }
 
 if (!interface_exists(\Phlix\Shared\Metadata\MetadataSourceInterface::class)) {
-    include __DIR__.'/../dev-stubs/MetadataSourceInterface.php';
+    require __DIR__ . '/../dev-stubs/MetadataSourceInterface.php';
 }
