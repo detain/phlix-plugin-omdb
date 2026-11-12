@@ -30,8 +30,8 @@
             "default": true,
             "required": false,
             "tier": "advanced",
-            "label": "Verify SSL",
-            "description": "Verify the TLS certificate presented by OMDb. Keep this ON. Turning it off lets any intercepting hop read and tamper with the traffic — including the API key that OMDb sends in the URL query string, which could be stolen. Use off only when debugging behind a proxy you control."
+            "label": "Verify TLS certificate",
+            "description": "Verify the TLS certificate presented by OMDb. Keep this on. Turning it off lets any intercepting hop read and tamper with the traffic — including your API key, which the plugin sends to OMDb in the URL query string and which could be stolen. Use off only when debugging behind a proxy you control."
         },
         "cache_ttl_seconds": {
             "type": "integer",
@@ -39,7 +39,7 @@
             "required": false,
             "tier": "advanced",
             "label": "Cache TTL (seconds)",
-            "description": "How long to cache OMDb responses; 0 disables the cache. Optional; default 86400 (24 hours)."
+            "description": "How long to cache OMDb responses; 0 disables the cache. Values above 2,592,000 (30 days) are lowered to 2,592,000, and negative values disable the cache. Optional; default 86400 (24 hours)."
         }
     },
     "signature": null

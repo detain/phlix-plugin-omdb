@@ -16,8 +16,8 @@ owns writing ratings and Phlix's rating aggregation.
 - **Multi-source ratings** — captures IMDb and Rotten Tomatoes scores
 - **Async HTTP** — HTTPS-only Workerman client, with a bounded blocking-cURL
   fallback for event loops (Swoole) where async TLS reads cannot complete
-- **Rate limiting** — fixed minimum spacing between calls (0.25s), plus an automatic cooldown to the next UTC midnight when OMDb reports a daily-limit envelope; the interval is not a setting
-- **Response caching** — configurable in-memory cache TTL to reduce API calls
+- **Rate limiting** — fixed minimum spacing between calls (0.25s), plus an automatic pause until the next UTC midnight once OMDb reports that your API key has used up its daily request allowance; the interval is not a setting
+- **Response caching** — configurable in-memory cache TTL to reduce API calls (`0` disables the cache; capped at 30 days)
 - **TLS verification toggle** — advanced escape hatch that disables certificate checking. OMDb authenticates with your key in the URL **query string**, so unverified TLS lets an intercepting hop harvest the API key. Keep it on; use off only when debugging behind a proxy you control
 - **Pure read** — `getDetails()` fetches and shapes data only; `onEnable()` does no network or DB I/O and never throws on a missing key
 
@@ -40,12 +40,16 @@ The plugin is unsigned by design — install via the Phlix admin UI:
 
 ## Settings
 
-| Setting | Type | Required | Secret | Tier | Default | Description |
-|---------|------|----------|--------|------|---------|-------------|
-| `enabled` | boolean | No | No | `standard` | `false` | Master on/off for OMDb rating enrichment. Optional; default off. |
-| `api_key` | string | **Yes** | Yes | `standard` | `null` | Your OMDb API key. The free tier allows 1,000 requests/day. |
-| `use_ssl_verification` | boolean | No | No | `advanced` | `true` | Verify OMDb's TLS certificate. **Keep on** — off exposes the query-string API key to interception/theft; debugging behind a trusted proxy only. |
-| `cache_ttl_seconds` | integer | No | No | `advanced` | `86400` | How long to cache OMDb responses; `0` disables the cache. Optional; default 86400 (24 hours). |
+`plugin.json` is the canonical source for these settings; each label and
+description below is copied from it verbatim, so edit `plugin.json` first and
+mirror the change here.
+
+| Setting | Label | Type | Required | Secret | Tier | Default | Description |
+|---------|-------|------|----------|--------|------|---------|-------------|
+| `enabled` | Enable OMDb | boolean | No | No | `standard` | `false` | Master on/off for OMDb rating enrichment. Optional; default off. |
+| `api_key` | OMDb API Key | string | **Yes** | Yes | `standard` | `null` | Your OMDb API key. The free tier allows 1,000 requests/day. |
+| `use_ssl_verification` | Verify TLS certificate | boolean | No | No | `advanced` | `true` | Verify the TLS certificate presented by OMDb. Keep this on. Turning it off lets any intercepting hop read and tamper with the traffic — including your API key, which the plugin sends to OMDb in the URL query string and which could be stolen. Use off only when debugging behind a proxy you control. |
+| `cache_ttl_seconds` | Cache TTL (seconds) | integer | No | No | `advanced` | `86400` | How long to cache OMDb responses; 0 disables the cache. Values above 2,592,000 (30 days) are lowered to 2,592,000, and negative values disable the cache. Optional; default 86400 (24 hours). |
 
 ### Where to get your OMDb API key
 
