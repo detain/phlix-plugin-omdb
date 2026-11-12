@@ -1876,4 +1876,42 @@ final class OmdbApiTest extends TestCase
         $this->assertStringContainsString(OmdbApi::MASKED_APIKEY, (string) $context['error']);
         $this->assertStringContainsString('without a parameter name', (string) $context['error']);
     }
+
+    /**
+     * [OMB-3] imdbRating outside 0..10 is dropped to null.
+     *
+     * @dataProvider outOfRangeImdbProvider
+     */
+    public function test_imdb_rating_out_of_range_is_null(string $raw): void
+    {
+        $this->assertNull(OmdbApi::extractRatings(['imdbRating' => $raw])['imdb']);
+    }
+
+    /** @return array<string, array{string}> */
+    public static function outOfRangeImdbProvider(): array
+    {
+        return ['above' => ['10.5'], 'huge' => ['99999'], 'negative' => ['-1'], 'exp' => ['1e3']];
+    }
+
+    public function test_imdb_rating_bounds_are_inclusive(): void
+    {
+        $this->assertSame(0.0, OmdbApi::extractRatings(['imdbRating' => '0'])['imdb']);
+        $this->assertSame(10.0, OmdbApi::extractRatings(['imdbRating' => '10.0'])['imdb']);
+    }
+
+    public function test_rotten_tomatoes_out_of_range_is_null(): void
+    {
+        $r = OmdbApi::extractRatings(['Ratings' => [['Source' => 'Rotten Tomatoes', 'Value' => '250%']]]);
+        $this->assertNull($r['rotten_tomatoes']);
+        $r = OmdbApi::extractRatings(['Ratings' => [['Source' => 'Rotten Tomatoes', 'Value' => '100%']]]);
+        $this->assertSame(10.0, $r['rotten_tomatoes']);
+    }
+
+    public function test_metascore_out_of_range_is_null(): void
+    {
+        $r = OmdbApi::extractRatings(['Ratings' => [['Source' => 'Metacritic', 'Value' => '500/100']]]);
+        $this->assertNull($r['metascore']);
+        $r = OmdbApi::extractRatings(['Ratings' => [['Source' => 'Metacritic', 'Value' => '100/100']]]);
+        $this->assertSame(10.0, $r['metascore']);
+    }
 }

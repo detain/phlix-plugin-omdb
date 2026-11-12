@@ -314,7 +314,7 @@ final class OmdbApi
         // Extract IMDb rating.
         $imdbRating = $details['imdbRating'] ?? null;
         if (is_string($imdbRating) && $imdbRating !== 'N/A' && is_numeric($imdbRating)) {
-            $imdb = (float) $imdbRating;
+            $imdb = self::boundScore((float) $imdbRating);
         }
 
         // Extract ratings from the Ratings array
@@ -346,6 +346,18 @@ final class OmdbApi
     }
 
     /**
+     * Range-bound a normalised score: anything outside 0..10 (or non-finite) is dropped.
+     */
+    private static function boundScore(float $score): ?float
+    {
+        if (is_finite($score) === false || $score < 0.0 || $score > 10.0) {
+            return null;
+        }
+
+        return $score;
+    }
+
+    /**
      * Parse a percentage string like "95%" to a 0-10 float.
      */
     private static function parsePercentage(string $value): ?float
@@ -353,7 +365,7 @@ final class OmdbApi
         if (preg_match('/^(\d+(?:\.\d+)?)\s*%$/', $value, $matches) === 1) {
             $num = (float) $matches[1];
             // OMDb returns 0-100, normalize to 0-10
-            return round($num / 10.0, 1);
+            return self::boundScore(round($num / 10.0, 1));
         }
 
         return null;
@@ -367,7 +379,7 @@ final class OmdbApi
         if (preg_match('/^(\d+(?:\.\d+)?)\s*\/\s*100$/', $value, $matches) === 1) {
             $num = (float) $matches[1];
             // OMDb returns 0-100, normalize to 0-10
-            return round($num / 10.0, 1);
+            return self::boundScore(round($num / 10.0, 1));
         }
 
         return null;
