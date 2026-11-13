@@ -1965,9 +1965,8 @@ final class OmdbApiTest extends TestCase
 
     /**
      * [OMB-3] imdbRating outside 0..10 is dropped to null.
-     *
-     * @dataProvider outOfRangeImdbProvider
      */
+    #[\PHPUnit\Framework\Attributes\DataProvider('outOfRangeImdbProvider')]
     public function test_imdb_rating_out_of_range_is_null(string $raw): void
     {
         $this->assertNull(OmdbApi::extractRatings(['imdbRating' => $raw])['imdb']);
