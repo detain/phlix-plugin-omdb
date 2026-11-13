@@ -2000,4 +2000,70 @@ final class OmdbApiTest extends TestCase
         $r = OmdbApi::extractRatings(['Ratings' => [['Source' => 'Metacritic', 'Value' => '100/100']]]);
         $this->assertSame(10.0, $r['metascore']);
     }
+    /**
+     * [OMDB-S4] Drive the REAL performCurlRequest (XFERINFO + WRITE callbacks)
+     * against a one-shot local TLS server instead of the curlTransport seam.
+     *
+     * @return array{body: string, error: string}
+     */
+    private function realCurlRoundTrip(string $mode): array
+    {
+        $key = openssl_pkey_new(['private_key_bits' => 2048]);
+        $this->assertNotFalse($key);
+        $csr = openssl_csr_new(['commonName' => '127.0.0.1'], $key);
+        $this->assertNotFalse($csr);
+        $crt = openssl_csr_sign($csr, null, $key, 1);
+        $this->assertNotFalse($crt);
+        openssl_x509_export($crt, $certPem);
+        openssl_pkey_export($key, $keyPem);
+        $pem = tempnam(sys_get_temp_dir(), 'omdbtls');
+        file_put_contents($pem, $certPem . $keyPem);
+
+        $proc = proc_open(
+            [PHP_BINARY, __DIR__ . '/Support/OmdbTlsFixtureServer.php', $pem, $mode],
+            [1 => ['pipe', 'w'], 2 => ['pipe', 'w']],
+            $pipes,
+        );
+        $this->assertIsResource($proc);
+        try {
+            $port = (int) trim((string) fgets($pipes[1]));
+            $this->assertGreaterThan(0, $port, 'fixture server must report its port');
+
+            $api = new OmdbApi('key', false, 0);
+            $m = new \ReflectionMethod(OmdbApi::class, 'performCurlRequest');
+            $m->setAccessible(true);
+
+            /** @var array{body: string, error: string} $r */
+            $r = $m->invoke($api, 'https://127.0.0.1:' . $port . '/?i=tt1');
+
+            return $r;
+        } finally {
+            fclose($pipes[1]);
+            fclose($pipes[2]);
+            proc_terminate($proc);
+            proc_close($proc);
+            @unlink($pem);
+        }
+    }
+
+    public function test_real_curl_transport_returns_a_small_body(): void
+    {
+        $r = $this->realCurlRoundTrip('ok');
+        $this->assertSame('', $r['error']);
+        $this->assertSame('{"Response":"True","Title":"Inception"}', $r['body']);
+    }
+
+    public function test_real_curl_transport_aborts_on_declared_oversize_via_xferinfo(): void
+    {
+        $r = $this->realCurlRoundTrip('declared-oversize');
+        $this->assertSame('', $r['body']);
+        $this->assertSame('OMDb response exceeds size cap', $r['error']);
+    }
+
+    public function test_real_curl_transport_aborts_undeclared_oversize_via_write_callback(): void
+    {
+        $r = $this->realCurlRoundTrip('chunked-oversize');
+        $this->assertSame('', $r['body']);
+        $this->assertSame('OMDb response exceeds size cap', $r['error']);
+    }
 }
