@@ -11,8 +11,8 @@
             "default": false,
             "required": false,
             "tier": "standard",
-            "label": "Enable OMDb",
-            "description": "Master on/off for OMDb rating enrichment. Optional; default off."
+            "label": "Enable OMDb lookups",
+            "description": "Turns OMDb rating lookups on or off. Optional; default off."
         },
         "api_key": {
             "type": "string",

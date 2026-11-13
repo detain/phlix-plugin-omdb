@@ -46,7 +46,7 @@ mirror the change here.
 
 | Setting | Label | Type | Required | Secret | Tier | Default | Description |
 |---------|-------|------|----------|--------|------|---------|-------------|
-| `enabled` | Enable OMDb | boolean | No | No | `standard` | `false` | Master on/off for OMDb rating enrichment. Optional; default off. |
+| `enabled` | Enable OMDb lookups | boolean | No | No | `standard` | `false` | Turns OMDb rating lookups on or off. Optional; default off. |
 | `api_key` | OMDb API Key | string | **Yes** | Yes | `standard` | `null` | Your OMDb API key. The free tier allows 1,000 requests/day. |
 | `use_ssl_verification` | Verify TLS certificate | boolean | No | No | `advanced` | `true` | Verify the TLS certificate presented by OMDb. Keep this on. Turning it off lets any intercepting hop read and tamper with the traffic — including your API key, which the plugin sends to OMDb in the URL query string and which could be stolen. Use off only when debugging behind a proxy you control. |
 | `cache_ttl_seconds` | Cache TTL (seconds) | integer | No | No | `advanced` | `86400` | How long to cache OMDb responses; 0 disables the cache. Values above 2,592,000 (30 days) are lowered to 2,592,000, and negative values disable the cache. Optional; default 86400 (24 hours). |
